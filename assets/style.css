@@ -240,6 +240,14 @@ body.sheet-open .voice-fab { opacity: 0; pointer-events: none; }
   0%, 100% { box-shadow: 0 0 0 0 rgba(181, 72, 62, .22); }
   50% { box-shadow: 0 0 0 12px rgba(181, 72, 62, 0); }
 }
+.voice-alts { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin-top: 10px; }
+.voice-alt {
+  text-align: left; font-size: 12px; line-height: 1.45;
+  padding: 8px 11px; border-radius: 12px;
+  background: var(--card-2); border: 1px solid var(--line);
+  color: var(--ink-2);
+}
+.voice-alt:active { background: var(--gold-wash); border-color: var(--gold-soft); }
 
 /* ---------- page heads ---------- */
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; padding: 10px 2px 14px; }

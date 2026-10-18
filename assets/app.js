@@ -1963,7 +1963,7 @@ function meView() {
 
   <div class="card quote mt16">
     <p>「把六年拆成 72 个月，再把今天过好。」</p>
-    <span>JACK · 六年之约 · v1.3</span>
+    <span>JACK · 六年之约 · v1.4</span>
   </div>
   <div class="small muted center mt12" style="padding-bottom:8px">所有数据仅保存在本机浏览器 · 记得定期导出备份</div>
   `;
@@ -3362,7 +3362,7 @@ function voicePages(text) {
 }
 
 function voiceSegments(text) {
-  const raw = String(text).split(/[，,。；;！!\n]|然后|还有|另外|接着/).map((s) => s.trim()).filter(Boolean);
+  const raw = voicePreSplit(text).split(/[，,。；;！!\n]|然后|还有|另外|接着/).map((s) => s.trim()).filter(Boolean);
   const out = [];
   for (const seg of raw) {
     const metric = /(分钟|分|小时|钟头|公里|千米|米|km|页|大卡|千卡|卡路里|卡|组|个|次|下|公斤|千克|kg|斤|磅|瓶|杯|毫升|ml|升|元|块|块钱)/i.test(seg);
@@ -3386,12 +3386,29 @@ function voiceMealType(text) {
 function voiceClean(text) {
   return text
     .replace(/今天|昨天|前天|昨儿|早上|上午|中午|下午|晚上|今晚|今早/g, '')
+    .replace(/早餐|早饭|午餐|午饭|晚餐|晚饭|加餐|夜宵|宵夜/g, '')
     .replace(/一共|总共|大概|大约|左右|我|一下|了/g, '')
-    .replace(/花了|花|消费|付了|支付|买了|买|用了|用时|吃了|吃|喝了|喝/g, '')
+    .replace(/花费了|花费|花了|花|消费|付了|支付|买了|买|用了|用时|吃饭|吃了|吃|喝了|喝/g, '')
     .replace(new RegExp(NUM_SRC + '\\s*(?:元|块钱|块|千卡|大卡|卡路里|卡|分钟|分|小时|公里|千米|页|瓶|杯|毫升|ml|升|公斤|千克|kg|斤|组|个|次|下)', 'g'), '')
     .replace(/[，,。；;！!、]/g, ' ')
+    .replace(/[还也又就都]+$/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/* Speech results often arrive without punctuation. Insert a boundary before
+   each strong intent marker so one long sentence can still become several
+   records: "跑了五公里喝了三瓶水存了五千块". */
+function voicePreSplit(text) {
+  const marker = '(?:(?:早上|上午|中午|下午|晚上|今晚|今早|昨晚|今天|昨天|前天|早餐|早饭|午餐|午饭|晚餐|晚饭|加餐|夜宵|宵夜)\\s*)?' +
+    '(?:跑步|跑了|慢跑|晨跑|夜跑|骑了|骑车|游泳|游了|跳绳|走了|徒步|爬山|做了|练了|' +
+    '喝了|喝水|饮水|吃了|吃饭|早餐|早饭|午餐|午饭|晚餐|晚饭|加餐|夜宵|宵夜|' +
+    '存了|存入|取了|取出|花了|消费了|付了|买了|学了|学习|背了|复习|刷题|读了|看书|体重|称了)';
+  // Don't cut inside a phrase like 中午吃了 / 晚饭花了 / 今天喝了:
+  // keep the time or food word attached to the intent that follows it.
+  const keep = '午晚早晨昨饭餐天上下吃喝跑骑游跳走爬练存取花买付学读看背刷体称';
+  return String(text).replace(new RegExp('([^，,。；;！!\\n\\s])(' + marker + ')', 'g'),
+    (m, before, hit) => (keep.includes(before) ? m : before + '，' + hit));
 }
 
 function voiceSubject(text) {
@@ -3406,6 +3423,16 @@ function voiceSubject(text) {
 function voiceExpenseCat(text) {
   for (const [re, cat] of WECHAT_CAT_RULES) if (re.test(text)) return cat;
   return 'other';
+}
+
+function voiceExpenseItem(text, amount, date) {
+  const cat = voiceExpenseCat(text);
+  const note = voiceClean(text) || '语音记账';
+  return {
+    kind: 'expense', date: date || voiceDate(text), cat, amount, note,
+    title: `消费 ${fmtMoney(amount)} · ${catById(cat).name}`, tag: '消费',
+    detail: `${fmtDate(date || voiceDate(text), false)} · ${note}`,
+  };
 }
 
 function voiceItem(base) {
@@ -3532,15 +3559,7 @@ function voiceItem(base) {
   }
 
   // expense
-  if (money > 0) {
-    const cat = voiceExpenseCat(c);
-    const note = voiceClean(c) || '语音记账';
-    return {
-      kind: 'expense', date, cat, amount: money, note,
-      title: `消费 ${fmtMoney(money)} · ${catById(cat).name}`, tag: '消费',
-      detail: `${fmtDate(date, false)} · ${note}`,
-    };
-  }
+  if (money > 0) return voiceExpenseItem(c, money, date);
 
   // three things
   const dailyMap = [
@@ -3557,11 +3576,35 @@ function voiceItem(base) {
   return null;
 }
 
+function voiceScore(text) {
+  const items = parseVoiceText(text);
+  const numeric = /[0-9零〇一二两三四五六七八九十百千万]/.test(text) ? 1 : 0;
+  return items.length * 10 + numeric + Math.min(String(text).length, 80) / 100;
+}
+
 function parseVoiceText(text) {
   const items = [];
   for (const seg of voiceSegments(text)) {
     const item = voiceItem({ text: seg });
-    if (item) items.push(item);
+    if (!item) continue;
+    // "吃饭花了106元" / "中午吃了牛肉面，花了35": the spend clause follows a
+    // meal clause and carries no food keyword of its own — keep it in 餐饮.
+    const prev = items[items.length - 1];
+    if (item.kind === 'expense' && item.cat === 'other' && prev && prev.kind === 'meal') {
+      item.cat = 'food';
+      item.title = `消费 ${fmtMoney(item.amount)} · 餐饮`;
+    }
+    items.push(item);
+    // A meal sentence that also names a price should create the expense too.
+    const money = voiceMoney(seg);
+    if (money > 0 && item.kind === 'meal') {
+      const exp = voiceExpenseItem(seg, money, item.date);
+      if (seg.includes('饭') || seg.includes('餐') || seg.includes('吃') || seg.includes('喝')) {
+        exp.cat = 'food';
+        exp.title = `消费 ${fmtMoney(exp.amount)} · 餐饮`;
+      }
+      items.push(exp);
+    }
   }
   return items;
 }
@@ -3700,16 +3743,20 @@ function sheetVoice() {
           ${ic('mic', 26)}<span>${SR ? '按一下开始说' : '用输入法的麦克风说话'}</span>
         </button>
         <div class="small muted center mt8" id="voice-status">${SR ? '也可以直接在下面打字或使用输入法语音' : '当前浏览器不支持直接录音，点输入框用键盘上的麦克风即可'}</div>
+        <div class="voice-alts" id="voice-alts"></div>
       </div>
       ${field('说的话', `<textarea class="input" id="voice-text" name="text" rows="3" placeholder="例：今天跑了五公里，用了三十分钟，中午吃了牛肉面，喝了三瓶水，还存了五千块"></textarea>`)}
       <div id="voice-preview"></div>
-      <div class="small muted mt16">语音识别由浏览器提供，音频可能上传到系统语音服务；识别出的文字只在本机解析，不会上传。保存前可以删掉识别错的条目。</div>
+      <div class="small muted mt16">识别不准时，直接改上面的文字，再点「识别」。语音识别由浏览器提供，音频可能上传到系统语音服务；识别出的文字只在本机解析，不会上传。保存前可以删掉识别错的条目。</div>
     `,
     afterMount(form) {
       const ta = form.querySelector('#voice-text');
       const mic = form.querySelector('#voice-mic');
       const status = form.querySelector('#voice-status');
+      const altsBox = form.querySelector('#voice-alts');
+      const clearAlts = () => { if (altsBox) altsBox.innerHTML = ''; };
       ta.addEventListener('input', () => {
+        clearAlts();
         voiceParsed = null;
         renderVoicePreview(form, []);
         updateVoiceSubmit('识别');
@@ -3721,18 +3768,28 @@ function sheetVoice() {
         rec.lang = 'zh-CN';
         rec.continuous = false;
         rec.interimResults = true;
+        rec.maxAlternatives = 5;
         let finalText = '';
+        let alts = [];
         let failed = false;
         rec.onstart = () => {
+          clearAlts();
           mic.classList.add('on');
           status.textContent = '正在听…说完停一下就好';
         };
         rec.onresult = (e) => {
           let interim = '';
           for (let i = e.resultIndex; i < e.results.length; i++) {
-            const t = e.results[i][0].transcript;
-            if (e.results[i].isFinal) finalText += t;
-            else interim += t;
+            const res = e.results[i];
+            if (res.isFinal) {
+              for (let j = 0; j < res.length; j++) {
+                const t = (res[j].transcript || '').trim();
+                if (t && !alts.includes(t)) alts.push(t);
+              }
+              finalText += res[0].transcript;
+            } else {
+              interim += res[0].transcript;
+            }
           }
           ta.value = (finalText + interim).trim();
         };
@@ -3746,12 +3803,28 @@ function sheetVoice() {
           mic.classList.remove('on');
           voiceRecog = null;
           if (failed) return;
-          if (ta.value.trim()) {
-            status.textContent = '识别完成，下面是整理结果';
-            runVoiceParse(form);
-          } else {
+          const unique = alts.slice(0, 3);
+          if (!unique.length && ta.value.trim()) unique.push(ta.value.trim());
+          if (!unique.length) {
             status.textContent = '没有听到内容，再试一次';
+            return;
           }
+          // Prefer the candidate the local parser can turn into the most records.
+          const best = unique.slice().sort((a, b) => voiceScore(b) - voiceScore(a))[0];
+          ta.value = best;
+          if (unique.length > 1) {
+            altsBox.innerHTML = `<div class="small muted">识别结果，点一句更准的：</div>` +
+              unique.map((t, i) => `<button type="button" class="voice-alt" data-i="${i}">${esc(t)}</button>`).join('');
+            altsBox.querySelectorAll('.voice-alt').forEach((b) => b.addEventListener('click', () => {
+              ta.value = unique[Number(b.dataset.i)];
+              clearAlts();
+              runVoiceParse(form);
+            }));
+            status.textContent = '识别完成，可从上面选更准的一句';
+          } else {
+            status.textContent = '识别完成，下面是整理结果';
+          }
+          runVoiceParse(form);
         };
         voiceRecog = rec;
         try { rec.start(); } catch (e) {
