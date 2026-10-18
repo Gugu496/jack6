@@ -2701,6 +2701,7 @@ function meView() {
       <button class="setting-row" data-act="export"><div class="sr-main"><div class="sr-title">导出备份</div><div class="sr-sub">下载一个 JSON 文件，换手机不丢数据</div></div>${ic('download', 18)}</button>
       <button class="setting-row" data-act="import"><div class="sr-main"><div class="sr-title">导入备份</div><div class="sr-sub">从 JSON 文件恢复记录</div></div>${ic('upload', 18)}</button>
       <button class="setting-row" data-act="load-demo"><div class="sr-main"><div class="sr-title">载入示例数据</div><div class="sr-sub">预览完整功能，会覆盖当前数据</div></div>${ic('spark', 18)}</button>
+      <button class="setting-row" data-act="check-update"><div class="sr-main"><div class="sr-title">检查更新</div><div class="sr-sub">重新加载最新版本，不影响已有记录</div></div>${ic('download', 18)}</button>
       <button class="setting-row" data-act="clear-all" style="color:var(--critical)"><div class="sr-main"><div class="sr-title">清空所有数据</div><div class="sr-sub" style="color:var(--critical);opacity:.7">无法恢复，请先导出备份</div></div>${ic('trash', 18)}</button>
     </div>
     <input type="file" id="import-file" accept="application/json,.json" hidden>
@@ -2708,7 +2709,7 @@ function meView() {
 
   <div class="card quote mt16">
     <p>「把六年拆成 72 个月，再把今天过好。」</p>
-    <span>JACK · 六年之约 · v1.0</span>
+    <span>JACK · 六年之约 · v1.1</span>
   </div>
   <div class="small muted center mt12" style="padding-bottom:8px">所有数据仅保存在本机浏览器 · 记得定期导出备份</div>
   `;
@@ -4079,6 +4080,9 @@ document.addEventListener('click', (e) => {
     case 'import-wechat':
       sheetImportWechat();
       break;
+    case 'check-update':
+      hardRefresh();
+      break;
     case 'load-demo': {
       const has = db.savings.length || db.expenses.length || db.workouts.length || db.studies.length || db.readings.length || db.daily.length;
       if (!has) loadDemo();
@@ -4155,13 +4159,44 @@ if (window.matchMedia) {
   else if (mq.addListener) mq.addListener(onChange);
 }
 
+function registerSW() {
+  if (!('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloading = false;
+  // A new version took over: reload once so the page runs the fresh script.
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) return;
+    reloading = true;
+    location.reload();
+  });
+  navigator.serviceWorker.register('./sw.js').then((reg) => {
+    reg.update().catch(() => {});
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') reg.update().catch(() => {});
+    });
+  }).catch(() => {});
+}
+
+async function hardRefresh() {
+  toast('正在获取最新版本…');
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+    if (window.caches) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    }
+  } catch (e) { /* reload anyway */ }
+  setTimeout(() => location.reload(), 350);
+}
+
 function init() {
   applyTheme();
   if (!location.hash) history.replaceState(null, '', '#/home');
   render();
-  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
-  }
+  registerSW();
 }
 
 init();

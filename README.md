@@ -46,6 +46,8 @@ iPhone（Safari）：底部分享按钮 →「添加到主屏幕」。
 
 > 手机版和桌面版的数据各自保存在本机浏览器里，互不互通。换设备或换入口前，先在「我的 → 导出备份」保存 JSON。
 
+更新后如果界面没变化，到「我的 → 数据管理 → 检查更新」点一下，或者在浏览器里彻底关闭应用再打开。脚本和样式使用了版本号，正常联网打开一次就会拿到最新版本。
+
 ---
 
 ## 快速开始（局域网 / PWA 版）
@@ -249,7 +251,7 @@ node tools/make-icons.js        # 重新生成 PNG / ICO 图标
 node tools/build-offline.js     # 重新打包 六年之约.html
 powershell -File tools/make-shortcut.ps1   # 重建桌面快捷方式
 node tools/shot.js              # 截图到 .shots/
-node tools/test.js              # 60 项表单/数据冒烟测试
+node tools/test.js              # 61 项表单/数据冒烟测试
 node tools/test-offline.js      # 单文件离线版自检
 ```
 

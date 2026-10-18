@@ -22,8 +22,8 @@ html = html
     `<link rel="icon" href="data:image/svg+xml;base64,${Buffer.from(iconSvg).toString('base64')}">`)
   .replace('<link rel="apple-touch-icon" href="assets/icon-180.png">',
     `<link rel="apple-touch-icon" href="data:image/png;base64,${iconPng}">`)
-  .replace('<link rel="stylesheet" href="assets/style.css">', `<style>\n${css}\n</style>`)
-  .replace('<script src="assets/app.js"></script>', `<script>\n${js}\n</script>`);
+  .replace(/<link rel="stylesheet" href="assets\/style\.css[^"]*">/, `<style>\n${css}\n</style>`)
+  .replace(/<script src="assets\/app\.js[^"]*"><\/script>/, `<script>\n${js}\n</script>`);
 
 if (html.includes('href="assets/') || html.includes('src="assets/')) {
   throw new Error('asset reference left in output');

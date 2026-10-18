@@ -274,6 +274,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     check('route ' + r, ok);
   }
 
+  // --- update controls present on "my" page ---
+  await evaluate(`location.hash='#/me'`);
+  await sleep(350);
+  check('check-update row present', await evaluate("!!document.querySelector('[data-act=\"check-update\"]')"));
+
   // --- persistence ---
   await evaluate('save(); location.reload()');
   await sleep(1500);

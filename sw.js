@@ -1,11 +1,11 @@
 /* 六年之约 PWA service worker — offline shell */
 'use strict';
-const CACHE = 'jack6-v6';
+const CACHE = 'jack6-v7';
 const ASSETS = [
   './',
   './index.html',
-  './assets/style.css',
-  './assets/app.js',
+  './assets/style.css?v=7',
+  './assets/app.js?v=7',
   './manifest.webmanifest',
   './assets/icon.svg',
   './assets/icon-180.png',
@@ -24,36 +24,25 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-/* Navigations: network first so a new deploy is picked up on the next open.
-   Assets: stale-while-revalidate so repeat opens stay instant and offline works. */
+/* Network first for everything, cache as the offline fallback.
+   The app is small, so this keeps a deployed fix from being masked by a stale
+   cached script, while offline opens still work from the last successful load. */
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
   if (url.origin !== self.location.origin) return;
 
-  if (e.request.mode === 'navigate') {
-    e.respondWith(
-      fetch(e.request)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put('./index.html', copy)).catch(() => {});
-          return res;
-        })
-        .catch(() => caches.match(e.request).then((hit) => hit || caches.match('./index.html')))
-    );
-    return;
-  }
-
   e.respondWith(
-    caches.match(e.request).then((hit) => {
-      const net = fetch(e.request)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
-          return res;
-        })
-        .catch(() => hit);
-      return hit || net;
-    })
+    fetch(e.request)
+      .then((res) => {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
+        return res;
+      })
+      .catch(() => caches.match(e.request).then((hit) => {
+        if (hit) return hit;
+        if (e.request.mode === 'navigate') return caches.match('./index.html');
+        return Response.error();
+      }))
   );
 });
