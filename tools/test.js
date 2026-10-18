@@ -360,6 +360,76 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await sleep(350);
   check('check-update row present', await evaluate("!!document.querySelector('[data-act=\"check-update\"]')"));
 
+  // --- voice parsing ---
+  const voice = (text) => evaluate(`parseVoiceText(${JSON.stringify(text)})`);
+  let v = await voice('今天跑了五公里，用了三十分钟');
+  check('voice run parsed', v.length === 1 && v[0].kind === 'workout' && v[0].activity === 'run', JSON.stringify(v));
+  check('voice run distance/minutes', v[0] && v[0].distance === 5 && v[0].minutes === 30, JSON.stringify(v[0]));
+  v = await voice('做了三组深蹲，每组十二个，四十公斤');
+  check('voice strength parsed', v.length === 1 && v[0].kind === 'workout' && v[0].activity === 'strength', JSON.stringify(v));
+  check('voice strength sets/reps/weight', v[0] && v[0].exercises[0].sets === 3 && v[0].exercises[0].reps === 12 && v[0].exercises[0].weight === 40, JSON.stringify(v[0] && v[0].exercises));
+  v = await voice('喝了三瓶水');
+  check('voice water 3 bottles', v.length === 1 && v[0].kind === 'water' && v[0].ml === 1500, JSON.stringify(v));
+  v = await voice('中午吃了牛肉面，六百大卡');
+  check('voice meal parsed', v.length === 1 && v[0].kind === 'meal' && v[0].meal === 'lunch' && v[0].kcal === 600, JSON.stringify(v));
+  check('voice meal name', v[0] && /牛肉面/.test(v[0].name), JSON.stringify(v[0]));
+  v = await voice('存了五千块工资');
+  check('voice savings deposit', v.length === 1 && v[0].kind === 'savings' && v[0].type === 'deposit' && v[0].amount === 5000, JSON.stringify(v));
+  v = await voice('花了三十五块打车');
+  check('voice expense traffic', v.length === 1 && v[0].kind === 'expense' && v[0].amount === 35 && v[0].cat === 'traffic', JSON.stringify(v));
+  v = await voice('学了四十五分钟英语');
+  check('voice study parsed', v.length === 1 && v[0].kind === 'study' && v[0].minutes === 45 && v[0].subject === '英语', JSON.stringify(v));
+  v = await voice('读了《原则》三十页，二十分钟');
+  check('voice reading parsed', v.length === 1 && v[0].kind === 'reading' && v[0].pages === 30 && v[0].minutes === 20 && v[0].book === '原则', JSON.stringify(v));
+  v = await voice('体重七十点五公斤');
+  check('voice weight parsed', v.length === 1 && v[0].kind === 'weight' && v[0].weight === 70.5, JSON.stringify(v));
+  const yesterday = await evaluate('addDays(todayISO(), -1)');
+  v = await voice('昨天喝了两杯水');
+  check('voice water yesterday', v.length === 1 && v[0].ml === 500 && v[0].date === yesterday, JSON.stringify(v));
+  v = await voice('测试习惯打卡');
+  check('voice habit parsed', v.length === 1 && v[0].kind === 'habit' && v[0].name === '测试习惯', JSON.stringify(v));
+  v = await voice('不开心的事是今天加班');
+  check('voice daily sad', v.length === 1 && v[0].kind === 'daily' && v[0].field === 'sad' && /加班/.test(v[0].text), JSON.stringify(v));
+  v = await voice('今天跑了5公里，用了30分钟，喝了三瓶水，还存了5000块');
+  check('voice multi-item', v.length === 3 && v.map((x) => x.kind).join(',') === 'workout,water,savings', JSON.stringify(v));
+  v = await voice('今天天气不错');
+  check('voice ignores chatter', v.length === 0, JSON.stringify(v));
+
+  const vBefore = await evaluate('({water:db.water.length, savings:db.savings.length, workouts:db.workouts.length})');
+  await evaluate(`(() => {
+    const items = parseVoiceText('喝了三瓶水，存了5000块，跑了五公里');
+    items.forEach((it) => {
+      if (it.kind === 'water') it.date = '2000-01-01';
+      if (it.kind === 'savings') it.note = '测试语音存';
+      if (it.kind === 'workout') it.note = '测试语音跑';
+    });
+    items.forEach(applyVoiceItem); save(); render();
+  })()`);
+  await sleep(350);
+  const vAfter = await evaluate('({water:db.water.length, savings:db.savings.length, workouts:db.workouts.length})');
+  check('voice apply water', vAfter.water === vBefore.water + 1, JSON.stringify(vAfter));
+  check('voice apply savings', vAfter.savings === vBefore.savings + 1 && (await evaluate('db.savings[db.savings.length-1].amount')) === 5000);
+  check('voice apply workout', vAfter.workouts === vBefore.workouts + 1);
+
+  // voice sheet: FAB opens, typed text previews, nothing saved until confirm
+  await evaluate(`location.hash='#/home'`);
+  await sleep(350);
+  check('voice fab present', await evaluate("!!document.querySelector('.voice-fab')"));
+  await evaluate("document.querySelector('.voice-fab').click()");
+  await sleep(350);
+  check('voice sheet opens', await evaluate("!!document.querySelector('#voice-text')"));
+  check('sheet hides fab', await evaluate("document.body.classList.contains('sheet-open')"));
+  await evaluate(`(() => { const f = document.querySelector('#sheet-form'); f.querySelector('#voice-text').value = '喝了三瓶水'; f.requestSubmit(); })()`);
+  await sleep(350);
+  check('voice preview rendered', await evaluate("document.querySelector('#voice-preview').textContent.includes('饮水')"));
+  check('voice preview pending save', await evaluate("voiceParsed && voiceParsed.length === 1"));
+  await evaluate('closeSheet()');
+  await sleep(200);
+  check('voice sheet closes cleanly', await evaluate("!document.querySelector('#sheet-form')"));
+
+  // remove voice test records before the persistence check
+  await evaluate(`db.water = db.water.filter(r => r.date !== '2000-01-01'); db.savings = db.savings.filter(r => r.note !== '测试语音存'); db.workouts = db.workouts.filter(r => r.note !== '测试语音跑'); save()`);
+
   // --- persistence ---
   await evaluate("localStorage.removeItem('jack6.sync.v1'); save(); location.reload()");
   await sleep(1500);

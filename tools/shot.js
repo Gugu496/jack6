@@ -124,6 +124,12 @@ async function getWs() {
   await shot('35-sheet-cloud-sync');
   await evaluate('closeSheet(); sheetSnapshots()');
   await shot('36-sheet-snapshots');
+  await evaluate('closeSheet(); sheetVoice()');
+  await shot('37-sheet-voice');
+  await evaluate(`(() => { const f = document.querySelector('#sheet-form');
+    f.querySelector('#voice-text').value = '今天跑了五公里，用了三十分钟，喝了三瓶水，中午吃了牛肉面，还存了五千块';
+    f.requestSubmit(); })()`);
+  await shot('38-voice-preview');
 
   // dark mode home
   await evaluate("closeSheet(); db.settings.theme='dark'; applyTheme(); location.hash='#/home'; render(true)");

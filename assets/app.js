@@ -479,6 +479,7 @@ const ICONS = {
   arrowDown: '<path d="M12 5v14m0 0 6-6m-6 6-6-6"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m16.5 16.5 4 4"/>',
   eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M9 21h6"/>',
 };
 function ic(name, size = 20) {
   return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
@@ -1962,7 +1963,7 @@ function meView() {
 
   <div class="card quote mt16">
     <p>「把六年拆成 72 个月，再把今天过好。」</p>
-    <span>JACK · 六年之约 · v1.2</span>
+    <span>JACK · 六年之约 · v1.3</span>
   </div>
   <div class="small muted center mt12" style="padding-bottom:8px">所有数据仅保存在本机浏览器 · 记得定期导出备份</div>
   `;
@@ -2182,6 +2183,7 @@ function openSheet(opts) {
 }
 
 function closeSheet() {
+  stopVoiceRecognition();
   const root = document.getElementById('sheet-root');
   if (!root.innerHTML) { sheetOpen = false; return; }
   root.innerHTML = '';
@@ -3213,6 +3215,560 @@ function deleteSnapshot(at) {
 }
 
 /* ================================================================
+   VOICE CAPTURE · one sentence -> several modules
+   ================================================================ */
+const CN_DIGITS = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+const CN_UNITS = { 十: 10, 百: 100, 千: 1000, 万: 10000, 亿: 100000000 };
+const NUM_SRC = '(\\d+(?:\\.\\d+)?|[零〇一二两三四五六七八九十百千万亿半]+(?:点[零〇一二三四五六七八九]+)?)';
+
+function cnToNum(str) {
+  const s = String(str || '').trim();
+  if (!s) return 0;
+  if (s === '半') return 0.5;
+  if (/^\d+(\.\d+)?$/.test(s)) return Number(s);
+  const parts = s.split('点');
+  let total = 0;
+  let section = 0;
+  let num = 0;
+  for (const ch of parts[0]) {
+    if (CN_DIGITS[ch] != null) num = CN_DIGITS[ch];
+    else if (CN_UNITS[ch]) {
+      const unit = CN_UNITS[ch];
+      if (unit >= 10000) { section = (section + num) * unit; total += section; section = 0; }
+      else section += (num || 1) * unit;
+      num = 0;
+    }
+  }
+  total += section + num;
+  if (parts[1]) {
+    let scale = 0.1;
+    for (const ch of parts[1]) {
+      if (CN_DIGITS[ch] != null) { total += CN_DIGITS[ch] * scale; scale /= 10; }
+    }
+  }
+  return total;
+}
+
+const VOICE_ACT_ALIASES = [
+  [/动感单车|单车课/, 'spin'],
+  [/慢跑|晨跑|夜跑|慢跑了/, 'jog'],
+  [/跑步|跑了|跑完|跑了个|跑/, 'run'],
+  [/骑行|骑车|自行车|单车/, 'cycle'],
+  [/游泳|游了|游了泳/, 'swim'],
+  [/跳绳/, 'rope'],
+  [/快走/, 'walk-fast'],
+  [/散步|走路|走了|遛弯/, 'walk'],
+  [/徒步|爬山|登山/, 'hike'],
+  [/椭圆机/, 'elliptical'],
+  [/划船机/, 'rower'],
+  [/爬楼/, 'stair'],
+  [/瑜伽/, 'yoga'],
+  [/拉伸/, 'stretch'],
+  [/普拉提/, 'pilates'],
+  [/篮球/, 'basketball'],
+  [/足球/, 'football'],
+  [/羽毛球/, 'badminton'],
+  [/乒乓/, 'pingpong'],
+  [/网球/, 'tennis'],
+  [/hiit|间歇/i, 'hiit'],
+  [/撸铁|力量|健身|练了/, 'strength'],
+  [/跳舞|舞蹈/, 'dance'],
+  [/格斗|拳击|搏击/, 'fight'],
+];
+const VOICE_PACE = { run: 6, jog: 7, cycle: 3, swim: 25, hike: 15, walk: 12, 'walk-fast': 9 };
+const VOICE_STRENGTH = ['深蹲', '硬拉', '卧推', '哑铃卧推', '上斜卧推', '引体向上', '高位下拉', '杠铃划船', '坐姿划船', '肩推', '侧平举', '弯举', '三头下压', '腿举', '腿弯举', '腿屈伸', '提踵', '臀桥', '卷腹', '平板支撑', '俯卧撑', '双杠臂屈伸', '面拉', '农夫行走'];
+const VOICE_MUSCLES = {
+  深蹲: ['腿', '臀'], 腿举: ['腿'], 腿弯举: ['腿'], 腿屈伸: ['腿'], 提踵: ['腿'], 臀桥: ['臀'],
+  硬拉: ['背', '腿'], 引体向上: ['背'], 高位下拉: ['背'], 杠铃划船: ['背'], 坐姿划船: ['背'], 面拉: ['肩', '背'],
+  卧推: ['胸'], 哑铃卧推: ['胸'], 上斜卧推: ['胸'], 俯卧撑: ['胸'], 双杠臂屈伸: ['胸', '手臂'],
+  肩推: ['肩'], 侧平举: ['肩'], 弯举: ['手臂'], 三头下压: ['手臂'], 卷腹: ['核心'], 平板支撑: ['核心'], 农夫行走: ['全身'],
+};
+
+function voiceDate(text) {
+  if (/前天/.test(text)) return addDays(todayISO(), -2);
+  if (/昨天|昨晚|昨儿/.test(text)) return addDays(todayISO(), -1);
+  const full = text.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (full) return `${full[1]}-${pad2(Number(full[2]))}-${pad2(Number(full[3]))}`;
+  const md = text.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?/);
+  if (md) return `${new Date().getFullYear()}-${pad2(Number(md[1]))}-${pad2(Number(md[2]))}`;
+  return todayISO();
+}
+
+function voiceMinutes(text) {
+  let total = 0;
+  let rest = text;
+  rest = rest.replace(new RegExp(NUM_SRC + '\\s*个?\\s*半\\s*(?:小时|钟头)', 'g'), (all, n) => {
+    total += (cnToNum(n) + 0.5) * 60; return ' ';
+  });
+  rest = rest.replace(/半\s*个?\s*(?:小时|钟头)/g, () => { total += 30; return ' '; });
+  rest = rest.replace(new RegExp(NUM_SRC + '\\s*个?\\s*(?:小时|钟头|h)(?![a-z])', 'gi'), (all, n) => {
+    total += cnToNum(n) * 60; return ' ';
+  });
+  rest = rest.replace(new RegExp(NUM_SRC + '\\s*(?:分钟|分|min)', 'gi'), (all, n) => {
+    total += cnToNum(n); return ' ';
+  });
+  return Math.round(total);
+}
+
+function voiceDistance(text) {
+  const m = text.match(new RegExp(NUM_SRC + '\\s*(公里|千米|英里|km|米|里|m(?![a-z]))', 'i'));
+  if (!m) return 0;
+  let n = cnToNum(m[1]);
+  const u = m[2].toLowerCase();
+  if (u === '米' || u === 'm') n /= 1000;
+  else if (u === '里') n *= 0.5;
+  else if (u === '英里') n *= 1.609;
+  return Math.round(n * 100) / 100;
+}
+
+function voiceWeight(text) {
+  const m = text.match(new RegExp(NUM_SRC + '\\s*(公斤|千克|kg|斤|磅)', 'i'));
+  if (!m) return 0;
+  let n = cnToNum(m[1]);
+  const u = m[2].toLowerCase();
+  if (u === '斤') n /= 2;
+  else if (u === '磅') n *= 0.4536;
+  return Math.round(n * 10) / 10;
+}
+
+function voiceKcal(text) {
+  const m = text.match(new RegExp(NUM_SRC + '\\s*(千卡|大卡|卡路里|kcal|卡)(?![路])', 'i'));
+  return m ? Math.round(cnToNum(m[1])) : 0;
+}
+
+function voiceMoney(text) {
+  let m = text.match(new RegExp(NUM_SRC + '\\s*(?:元|块钱|块|rmb|人民币)', 'i'));
+  if (m) return cnToNum(m[1]);
+  m = text.match(new RegExp('(?:花了|花|消费了|消费|付了|支付了|支付|存了|存|取了|取出|买了|买)\\s*' + NUM_SRC));
+  return m ? cnToNum(m[1]) : 0;
+}
+
+function voiceVolume(text) {
+  const m = text.match(new RegExp(NUM_SRC + '\\s*(毫升|ml|升|l|瓶|杯|壶|罐)', 'i'));
+  if (!m) return 0;
+  const n = cnToNum(m[1]);
+  const u = m[2].toLowerCase();
+  if (u === '瓶') return Math.round(n * 500);
+  if (u === '杯') return Math.round(n * 250);
+  if (u === '壶') return Math.round(n * 1000);
+  if (u === '罐') return Math.round(n * 330);
+  if (u === '升' || u === 'l') return Math.round(n * 1000);
+  return Math.round(n);
+}
+
+function voicePages(text) {
+  const m = text.match(new RegExp(NUM_SRC + '\\s*页'));
+  return m ? Math.round(cnToNum(m[1])) : 0;
+}
+
+function voiceSegments(text) {
+  const raw = String(text).split(/[，,。；;！!\n]|然后|还有|另外|接着/).map((s) => s.trim()).filter(Boolean);
+  const out = [];
+  for (const seg of raw) {
+    const metric = /(分钟|分|小时|钟头|公里|千米|米|km|页|大卡|千卡|卡路里|卡|组|个|次|下|公斤|千克|kg|斤|磅|瓶|杯|毫升|ml|升|元|块|块钱)/i.test(seg);
+    const verb = /跑|骑|游|跳|走|练|做|存|取|花|买|付|吃|喝|读|看|学|背|称|打卡|完成|体重/.test(seg);
+    const object = /[水酒茶奶饭面肉菜果书药]|深蹲|卧推|硬拉|俯卧撑|引体|卷腹|平板|哑铃|杠铃/.test(seg);
+    if (out.length && metric && !verb && !object && seg.length <= 20) out[out.length - 1] += '，' + seg;
+    else out.push(seg);
+  }
+  return out;
+}
+
+function voiceMealType(text) {
+  if (/早餐|早饭|早上吃|今早/.test(text)) return 'breakfast';
+  if (/午餐|午饭|中午吃/.test(text)) return 'lunch';
+  if (/晚餐|晚饭|晚上吃|宵夜|夜宵/.test(text)) return 'dinner';
+  if (/加餐|零食|下午茶/.test(text)) return 'snack';
+  const h = new Date().getHours();
+  return h < 10 ? 'breakfast' : h < 15 ? 'lunch' : h < 21 ? 'dinner' : 'snack';
+}
+
+function voiceClean(text) {
+  return text
+    .replace(/今天|昨天|前天|昨儿|早上|上午|中午|下午|晚上|今晚|今早/g, '')
+    .replace(/一共|总共|大概|大约|左右|我|一下|了/g, '')
+    .replace(/花了|花|消费|付了|支付|买了|买|用了|用时|吃了|吃|喝了|喝/g, '')
+    .replace(new RegExp(NUM_SRC + '\\s*(?:元|块钱|块|千卡|大卡|卡路里|卡|分钟|分|小时|公里|千米|页|瓶|杯|毫升|ml|升|公斤|千克|kg|斤|组|个|次|下)', 'g'), '')
+    .replace(/[，,。；;！!、]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function voiceSubject(text) {
+  if (/英语|英文|单词|听力|口语|雅思|托福/.test(text)) return '英语';
+  if (/编程|代码|算法|前端|后端|java|python|javascript|数据结构|刷题/i.test(text)) return '编程';
+  if (/写作|作文|文案|日记/.test(text)) return '写作';
+  if (/阅读|读书/.test(text)) return '阅读';
+  if (/历史|哲学|心理|经济|通识/.test(text)) return '通识';
+  return '专业';
+}
+
+function voiceExpenseCat(text) {
+  for (const [re, cat] of WECHAT_CAT_RULES) if (re.test(text)) return cat;
+  return 'other';
+}
+
+function voiceItem(base) {
+  const date = voiceDate(base.text);
+  const money = voiceMoney(base.text);
+  const minutes = voiceMinutes(base.text);
+  const c = base.text;
+
+  // habit check-in (only explicit wording, so "做了深蹲" stays a workout)
+  const habit = (db.habits || []).find((h) => h.name && c.includes(h.name) && /打卡|完成|坚持|做到了/.test(c));
+  if (habit) return { kind: 'habit', date, habitId: habit.id, name: habit.name, title: `${habit.name} 打卡`, tag: '习惯', detail: fmtDate(date, false) };
+
+  // savings
+  if (/(存了|存入|存进|存钱|攒了|取了|取出)/.test(c) && money > 0) {
+    const type = /(取了|取出)/.test(c) ? 'withdraw' : 'deposit';
+    const note = voiceClean(c.replace(/存了|存入|存进|存钱|攒了|取了|取出/g, '')) || (type === 'deposit' ? '语音存入' : '语音取出');
+    return {
+      kind: 'savings', date, type, amount: money, note,
+      title: `${type === 'deposit' ? '存入' : '取出'} ${fmtMoney(money)}`, tag: '存钱',
+      detail: `${fmtDate(date, false)}${note ? ' · ' + note : ''}`,
+    };
+  }
+
+  // body weight
+  if (/体重|称了|称重|上秤/.test(c) && voiceWeight(c) > 0) {
+    const weight = voiceWeight(c);
+    return { kind: 'weight', date, weight, title: `体重 ${weight} kg`, tag: '身体', detail: fmtDate(date, false) };
+  }
+
+  // water
+  const water = /(喝水|饮水|白水|水)/.test(c) || /喝/.test(c);
+  const notWater = /酒|啤酒|咖啡|茶|奶茶|奶|汤|饮料|果汁|可乐/.test(c);
+  const volume = voiceVolume(c);
+  if (water && !notWater && volume > 0) {
+    return { kind: 'water', date, ml: volume, title: `饮水 ${volume} ml`, tag: '饮水', detail: fmtDate(date, false) };
+  }
+
+  // strength sets
+  const exercise = VOICE_STRENGTH.find((n) => c.includes(n));
+  if (exercise) {
+    const setsM = c.match(new RegExp(NUM_SRC + '\\s*组'));
+    const repsM = c.match(new RegExp('(?:每组|每組)?\\s*' + NUM_SRC + '\\s*(?:个|次|下)'));
+    const exWeight = voiceWeight(c);
+    const sets = setsM ? Math.round(cnToNum(setsM[1])) : (repsM ? 1 : 0);
+    const reps = repsM ? Math.round(cnToNum(repsM[1])) : 0;
+    let mins = minutes;
+    if (!mins && sets) mins = Math.max(4, Math.round(sets * (reps * 3 + 60) / 60));
+    if (!mins) mins = 10;
+    return {
+      kind: 'workout', date, activity: 'strength', minutes: mins,
+      exercises: [{ name: exercise, sets, reps, weight: exWeight }],
+      muscles: VOICE_MUSCLES[exercise] || [],
+      note: c,
+      title: `力量 · ${exercise} ${sets ? sets + ' 组' : ''}${reps ? ' × ' + reps : ''}${exWeight ? ' · ' + exWeight + 'kg' : ''}`,
+      tag: '训练', detail: `${mins} 分钟 · ${fmtDate(date, false)}`,
+    };
+  }
+
+  // cardio / sport
+  let actId = '';
+  for (const [re, id] of VOICE_ACT_ALIASES) { if (re.test(c)) { actId = id; break; } }
+  if (actId) {
+    const distance = voiceDistance(c);
+    const kcal = voiceKcal(c);
+    let mins = minutes;
+    if (!mins && distance && VOICE_PACE[actId]) mins = Math.max(3, Math.round(distance * VOICE_PACE[actId]));
+    if (!mins && kcal) mins = Math.max(3, Math.round(kcal * 60 / (actById(actId).met * latestWeight())));
+    if (mins) {
+      const act = actById(actId);
+      return {
+        kind: 'workout', date, activity: actId, minutes: mins, distance: act.dist ? distance : 0,
+        exercises: [], muscles: [], note: c, kcalHint: kcal,
+        title: `${act.name} ${mins} 分钟${distance ? ' · ' + distance + ' km' : ''}`,
+        tag: '训练', detail: `${fmtDate(date, false)}${kcal ? ' · ' + kcal + ' 千卡' : ''}`,
+      };
+    }
+  }
+
+  // reading
+  if (/读书|看书|阅读|读了|看完|《/.test(c) || (/看了/.test(c) && /页/.test(c))) {
+    const pages = voicePages(c);
+    const mins = minutes;
+    if (pages || mins) {
+      const q = c.match(/《([^》]+)》/);
+      let book = q ? q[1].trim() : '';
+      if (!book) {
+        const m = c.match(/(?:读了|读的是|在读|在看|看的是)\s*([^\s，,。0-9零一二两三四五六七八九十百千]{1,20})/);
+        if (m) book = m[1].replace(/这本|这本书|书$/, '');
+      }
+      if (!book) {
+        const last = [...db.readings].reverse().find((r) => r.book && !r.finished);
+        book = last ? last.book : '未命名书籍';
+      }
+      return {
+        kind: 'reading', date, book, pages, minutes: mins,
+        finished: /读完|看完了|读完了/.test(c),
+        title: `《${book}》${pages ? ' ' + pages + ' 页' : ''}${mins ? ' · ' + mins + ' 分钟' : ''}`,
+        tag: '阅读', detail: fmtDate(date, false),
+      };
+    }
+  }
+
+  // study
+  if (/学习|学了|背单词|听课|上课|复习|刷题|练习|看书学习/.test(c) && minutes > 0) {
+    return {
+      kind: 'study', date, minutes, subject: voiceSubject(c),
+      content: voiceClean(c) || '语音学习',
+      title: `${voiceSubject(c)} ${minutes} 分钟`, tag: '学习',
+      detail: `${fmtDate(date, false)} · ${voiceClean(c) || '语音学习'}`,
+    };
+  }
+
+  // meal
+  const eats = /吃|早餐|早饭|午餐|午饭|晚餐|晚饭|加餐|夜宵|宵夜|喝了/.test(c);
+  if (eats && !notWater) {
+    const meal = voiceMealType(c);
+    const kcal = voiceKcal(c);
+    const name = voiceClean(c) || '语音记录';
+    return {
+      kind: 'meal', date, meal, name, kcal,
+      title: `${(MEAL_TYPES.find((m) => m.id === meal) || MEAL_TYPES[1]).name} · ${name}`,
+      tag: '饮食', detail: `${fmtDate(date, false)}${kcal ? ' · ' + kcal + ' 千卡' : ''}`,
+    };
+  }
+
+  // expense
+  if (money > 0) {
+    const cat = voiceExpenseCat(c);
+    const note = voiceClean(c) || '语音记账';
+    return {
+      kind: 'expense', date, cat, amount: money, note,
+      title: `消费 ${fmtMoney(money)} · ${catById(cat).name}`, tag: '消费',
+      detail: `${fmtDate(date, false)} · ${note}`,
+    };
+  }
+
+  // three things
+  const dailyMap = [
+    [/不开心的事|不开心的是|难过的事|烦心事/, 'sad', '不开心的事'],
+    [/开心的事|开心的是|高兴的事/, 'happy', '开心的事'],
+    [/今天的思考|今天想|我的思考|思考了/, 'thought', '今天的思考'],
+  ];
+  for (const [re, field, label] of dailyMap) {
+    if (re.test(c)) {
+      const text = c.replace(re, '').replace(/^[是：:，,\s]+/, '').trim();
+      if (text) return { kind: 'daily', date, field, text, title: `${label}：${text.slice(0, 18)}`, tag: '三件事', detail: fmtDate(date, false) };
+    }
+  }
+  return null;
+}
+
+function parseVoiceText(text) {
+  const items = [];
+  for (const seg of voiceSegments(text)) {
+    const item = voiceItem({ text: seg });
+    if (item) items.push(item);
+  }
+  return items;
+}
+
+function applyVoiceItem(item) {
+  if (!item) return false;
+  const date = item.date || todayISO();
+  switch (item.kind) {
+    case 'savings':
+      db.savings.push({ id: uid(), date, type: item.type, amount: item.amount, note: item.note });
+      return true;
+    case 'expense':
+      db.expenses.push({ id: uid(), date, cat: item.cat, amount: item.amount, note: item.note });
+      return true;
+    case 'water':
+      db.water.push({ id: uid(), date, ml: item.ml, time: '' });
+      return true;
+    case 'meal':
+      db.meals.push({ id: uid(), date, meal: item.meal, name: item.name, kcal: item.kcal, note: '语音记录' });
+      return true;
+    case 'weight': {
+      db.weights.push({ id: uid(), date, weight: item.weight, bodyFat: '', waist: '', chest: '', arm: '', thigh: '', hip: '' });
+      db.settings.weight = item.weight;
+      return true;
+    }
+    case 'study':
+      db.studies.push({ id: uid(), date, subject: item.subject, minutes: item.minutes, content: item.content, note: '语音记录' });
+      return true;
+    case 'reading':
+      db.readings.push({ id: uid(), date, book: item.book, pages: item.pages, minutes: item.minutes, note: '', finished: !!item.finished });
+      return true;
+    case 'habit': {
+      const log = db.habitLogs[item.habitId] || (db.habitLogs[item.habitId] = []);
+      if (log.includes(date)) return false;
+      log.push(date);
+      return true;
+    }
+    case 'daily': {
+      let entry = db.daily.find((d) => d.date === date);
+      if (!entry) { entry = { id: uid(), date, happy: '', sad: '', thought: '' }; db.daily.push(entry); }
+      entry[item.field] = entry[item.field] ? entry[item.field] + '；' + item.text : item.text;
+      return true;
+    }
+    case 'workout': {
+      const act = actById(item.activity);
+      const weight = latestWeight();
+      let minutes = Math.max(1, Math.round(item.minutes || 0));
+      let kcal = item.kcalHint || 0;
+      if (!kcal) kcal = Math.round((act.met * weight * minutes) / 60);
+      if (!kcal) kcal = 1;
+      db.workouts.push({
+        id: uid(), date, type: act.type, activity: act.id, activityName: act.name, met: act.met,
+        minutes, bodyweight: weight, distance: act.dist ? (item.distance || '') : '',
+        hr: '', rpe: '', muscles: item.muscles || [], exercises: item.exercises || [],
+        kcal, note: item.note || '语音记录',
+      });
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+/* ------------------------------ voice UI ------------------------------ */
+let voiceParsed = null;
+let voiceRecog = null;
+
+function stopVoiceRecognition() {
+  if (voiceRecog) {
+    try { voiceRecog.abort(); } catch (e) { /* ignore */ }
+    voiceRecog = null;
+  }
+}
+
+function updateVoiceSubmit(label) {
+  const btn = document.querySelector('#sheet-form button[type="submit"]');
+  if (btn) btn.textContent = label;
+}
+
+function renderVoicePreview(form, items) {
+  const el = form && form.querySelector('#voice-preview');
+  if (!el) return;
+  if (!items || !items.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="section-head mt16"><h3>识别到 ${items.length} 项</h3><span class="sub">确认后保存</span></div>` +
+    items.map((it, i) => `<div class="card card-pad" style="margin-bottom:10px">
+      <div class="flex" style="justify-content:space-between;align-items:center;gap:10px">
+        <b style="font-size:14px">${esc(it.title)}</b><span class="tag gold">${esc(it.tag)}</span>
+      </div>
+      <div class="small muted mt6">${esc(it.detail || '')}</div>
+      <button type="button" class="btn btn-sm btn-ghost mt8" data-act="voice-drop" data-idx="${i}">不要这条</button>
+    </div>`).join('');
+}
+
+function runVoiceParse(form) {
+  const ta = form && form.querySelector('#voice-text');
+  const text = ta ? ta.value.trim() : '';
+  if (!text) { toast('先说一句，或者直接打一句话'); return false; }
+  const items = parseVoiceText(text);
+  if (!items.length) {
+    voiceParsed = null;
+    renderVoicePreview(form, []);
+    updateVoiceSubmit('识别');
+    toast('没认出可记录的内容，换个说法试试');
+    return false;
+  }
+  voiceParsed = items;
+  renderVoicePreview(form, items);
+  updateVoiceSubmit(`保存 ${items.length} 项`);
+  return true;
+}
+
+function saveVoiceItems() {
+  const items = voiceParsed || [];
+  if (!items.length) return;
+  let saved = 0;
+  for (const it of items) {
+    try { if (applyVoiceItem(it)) saved++; } catch (e) { console.warn('voice apply failed', e); }
+  }
+  if (!saved) { toast('没有可保存的内容'); return; }
+  save();
+  render();
+  closeSheet();
+  toast(`已记录 ${saved} 项`);
+}
+
+function sheetVoice() {
+  voiceParsed = null;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  openSheet({
+    title: '语音记一笔',
+    subtitle: '说一句话，自动分到存钱、消费、训练、饮食、学习…',
+    submit: '识别',
+    body: `
+      <div class="voice-box">
+        <button type="button" class="voice-mic" id="voice-mic" ${SR ? '' : 'disabled'}>
+          ${ic('mic', 26)}<span>${SR ? '按一下开始说' : '用输入法的麦克风说话'}</span>
+        </button>
+        <div class="small muted center mt8" id="voice-status">${SR ? '也可以直接在下面打字或使用输入法语音' : '当前浏览器不支持直接录音，点输入框用键盘上的麦克风即可'}</div>
+      </div>
+      ${field('说的话', `<textarea class="input" id="voice-text" name="text" rows="3" placeholder="例：今天跑了五公里，用了三十分钟，中午吃了牛肉面，喝了三瓶水，还存了五千块"></textarea>`)}
+      <div id="voice-preview"></div>
+      <div class="small muted mt16">语音识别由浏览器提供，音频可能上传到系统语音服务；识别出的文字只在本机解析，不会上传。保存前可以删掉识别错的条目。</div>
+    `,
+    afterMount(form) {
+      const ta = form.querySelector('#voice-text');
+      const mic = form.querySelector('#voice-mic');
+      const status = form.querySelector('#voice-status');
+      ta.addEventListener('input', () => {
+        voiceParsed = null;
+        renderVoicePreview(form, []);
+        updateVoiceSubmit('识别');
+      });
+      if (!SR || !mic) return;
+      mic.addEventListener('click', () => {
+        if (voiceRecog) { stopVoiceRecognition(); return; }
+        const rec = new SR();
+        rec.lang = 'zh-CN';
+        rec.continuous = false;
+        rec.interimResults = true;
+        let finalText = '';
+        let failed = false;
+        rec.onstart = () => {
+          mic.classList.add('on');
+          status.textContent = '正在听…说完停一下就好';
+        };
+        rec.onresult = (e) => {
+          let interim = '';
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            const t = e.results[i][0].transcript;
+            if (e.results[i].isFinal) finalText += t;
+            else interim += t;
+          }
+          ta.value = (finalText + interim).trim();
+        };
+        rec.onerror = (e) => {
+          failed = true;
+          status.textContent = /not-allowed|service-not-allowed/.test(e.error || '')
+            ? '没有麦克风权限，或系统语音服务不可用。可以点输入框用键盘上的麦克风。'
+            : '没听清（' + (e.error || '未知错误') + '），再试一次或直接打字';
+        };
+        rec.onend = () => {
+          mic.classList.remove('on');
+          voiceRecog = null;
+          if (failed) return;
+          if (ta.value.trim()) {
+            status.textContent = '识别完成，下面是整理结果';
+            runVoiceParse(form);
+          } else {
+            status.textContent = '没有听到内容，再试一次';
+          }
+        };
+        voiceRecog = rec;
+        try { rec.start(); } catch (e) {
+          voiceRecog = null;
+          status.textContent = '语音服务启动失败，可以直接打字';
+        }
+      });
+    },
+    onSubmit(form) {
+      if (voiceParsed && voiceParsed.length) { saveVoiceItems(); return false; }
+      runVoiceParse(form);
+      return false;
+    },
+  });
+}
+
+/* ================================================================
    WELCOME · DEMO · DATA
    ================================================================ */
 function showWelcome() {
@@ -3719,6 +4275,9 @@ document.addEventListener('click', (e) => {
       break;
     case 'check-update':
       hardRefresh();
+      break;
+    case 'voice':
+      sheetVoice();
       break;
     case 'cloud-sync':
       sheetCloudSync();
