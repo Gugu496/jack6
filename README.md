@@ -249,7 +249,7 @@ node tools/make-icons.js        # 重新生成 PNG / ICO 图标
 node tools/build-offline.js     # 重新打包 六年之约.html
 powershell -File tools/make-shortcut.ps1   # 重建桌面快捷方式
 node tools/shot.js              # 截图到 .shots/
-node tools/test.js              # 55 项表单/数据冒烟测试
+node tools/test.js              # 60 项表单/数据冒烟测试
 node tools/test-offline.js      # 单文件离线版自检
 ```
 

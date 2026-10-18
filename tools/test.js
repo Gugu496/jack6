@@ -245,6 +245,27 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await sleep(400);
   check('settings saved', (await evaluate("db.settings.nickname + '|' + db.settings.waterGoal")) === 'Tester|2600');
 
+  // --- custom pact dates must propagate to every date label ---
+  await evaluate('sheetSettings()');
+  await evaluate(`(() => { const f = document.querySelector('#sheet-form');
+    f.startDate.value = '2025-01-01'; f.endDate.value = '2029-12-31'; f.requestSubmit(); })()`);
+  await sleep(450);
+  check('settings dates saved', (await evaluate("db.settings.startDate + '|' + db.settings.endDate")) === '2025-01-01|2029-12-31');
+  await evaluate(`location.hash='#/home'`);
+  await sleep(450);
+  const heroTxt = await evaluate("document.querySelector('.hero').textContent");
+  check('hero shows custom start', heroTxt.includes('2025.01.01'), heroTxt.replace(/\s+/g, ' ').slice(0, 160));
+  check('hero shows custom end', heroTxt.includes('2029.12.31'), heroTxt.replace(/\s+/g, ' ').slice(0, 160));
+  check('hero drops hardcoded dates', !heroTxt.includes('2024.12.30') && !heroTxt.includes('2030.12.31'));
+  await evaluate(`location.hash='#/me'`);
+  await sleep(450);
+  const meTxt = await evaluate("document.querySelector('.profile-card').textContent");
+  check('me page shows custom dates', meTxt.includes('2025.01.01') && meTxt.includes('2029.12.31'), meTxt.replace(/\s+/g, ' ').slice(0, 160));
+  await evaluate('sheetSettings()');
+  await evaluate(`(() => { const f = document.querySelector('#sheet-form');
+    f.startDate.value = '2024-12-30'; f.endDate.value = '2030-12-31'; f.requestSubmit(); })()`);
+  await sleep(400);
+
   // --- navigation all routes ---
   for (const r of ['home', 'savings', 'expenses', 'fitness', 'study', 'reading', 'daily', 'habits', 'me', 'body', 'diet', 'watch']) {
     await evaluate(`location.hash='#/${r}'`);

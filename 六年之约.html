@@ -961,6 +961,7 @@ function fmtDateShort(s) {
   const d = parseD(s);
   return (d.getMonth() + 1) + '/' + d.getDate();
 }
+function fmtDotDate(s) { return String(s || '').replace(/-/g, '.'); }
 function relDay(s) {
   const diff = daysBetween(s, todayISO());
   if (diff === 0) return '今天';
@@ -1508,13 +1509,14 @@ function delBtn(kind, id) {
 /* ------------------------------ home view ------------------------------ */
 function heroHome() {
   const g = goalStats();
+  const s = db.settings;
   return `<section class="hero">
     <div class="hero-eyebrow">${ic('spark', 14)}<span>Jack&rsquo;s six-year pact</span></div>
-    <div class="hero-big-row"><span class="hero-big">${fmtNum(g.remaining)}</span><span class="hero-unit">天后 · 2030.12.31</span></div>
+    <div class="hero-big-row"><span class="hero-big">${fmtNum(g.remaining)}</span><span class="hero-unit">天后 · ${fmtDotDate(s.endDate)}</span></div>
     <div class="hero-caption">第 ${fmtNum(g.elapsed)} 天 / 共 ${fmtNum(g.total)} 天 · 每天比昨天好一点点</div>
     <div class="hero-meter">
       ${meter(g.timePct)}
-      <div class="hero-meter-labels"><span>2024.12.30</span><span>${g.timePct.toFixed(1)}%</span><span>2030.12.31</span></div>
+      <div class="hero-meter-labels"><span>${fmtDotDate(s.startDate)}</span><span>${g.timePct.toFixed(1)}%</span><span>${fmtDotDate(s.endDate)}</span></div>
     </div>
     <div class="hero-divider"></div>
     <div class="hero-row">
@@ -2654,7 +2656,7 @@ function meView() {
     <div class="grow">
       <div class="profile-name">${esc(me.nickname || 'Jack')}</div>
       <div class="profile-sub">第 ${fmtNum(g.dayIndex)} 天 · 连续记录 ${recordStreak()} 天${db.meta.demo ? ' · 示例数据' : ''}</div>
-      <div class="profile-sub">2024.12.30 — 2030.12.31</div>
+      <div class="profile-sub">${fmtDotDate(me.startDate)} — ${fmtDotDate(me.endDate)}</div>
     </div>
     <button class="icon-btn" data-act="open-settings" aria-label="设置">${ic('settings', 19)}</button>
   </div>
