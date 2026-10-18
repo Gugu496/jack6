@@ -1,0 +1,17 @@
+{
+  "name": "六年之约 · Jack",
+  "short_name": "六年之约",
+  "description": "存钱、消费、健身、学习、阅读、习惯与每日三件事的记录本。每天比昨天好一点点。",
+  "lang": "zh-CN",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F3EEE3",
+  "theme_color": "#F3EEE3",
+  "icons": [
+    { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
