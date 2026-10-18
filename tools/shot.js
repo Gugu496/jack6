@@ -120,6 +120,10 @@ async function getWs() {
   await shot('33-sheet-watch-import');
   await evaluate('closeSheet(); sheetImportWechat()');
   await shot('34-sheet-wechat-import');
+  await evaluate('closeSheet(); sheetCloudSync()');
+  await shot('35-sheet-cloud-sync');
+  await evaluate('closeSheet(); sheetSnapshots()');
+  await shot('36-sheet-snapshots');
 
   // dark mode home
   await evaluate("closeSheet(); db.settings.theme='dark'; applyTheme(); location.hash='#/home'; render(true)");

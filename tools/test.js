@@ -183,6 +183,87 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await sleep(400);
   check('wechat tag rendered', await evaluate("document.querySelector('#view').innerHTML.includes('微信')"));
 
+  // --- snapshots ---
+  const snapCountBefore = await evaluate('snapshots().length');
+  await evaluate(`snapshot('auto')`);
+  check('snapshot recorded', (await evaluate('snapshots().length')) === snapCountBefore + 1, String(snapCountBefore));
+  check('snapshot survives reload shape', await evaluate("snapshots().every(s => typeof s.at === 'number' && typeof s.data === 'string')"));
+
+  // --- encrypted cloud payload ---
+  const cryptoRes = await evaluate(`(async () => {
+    const blob = await encryptPayload('{"hello":"world"}', 'secret123');
+    const back = await decryptPayload(blob, 'secret123');
+    let wrongRejected = false;
+    try { await decryptPayload(blob, 'wrongpass'); } catch (e) { wrongRejected = true; }
+    return { back, wrongRejected, ciphertextOnly: !blob.includes('hello') && blob.includes('jack6-enc-v1') };
+  })()`);
+  check('cloud payload roundtrip', cryptoRes.back === '{"hello":"world"}', JSON.stringify(cryptoRes));
+  check('cloud payload rejects wrong passphrase', cryptoRes.wrongRejected);
+  check('cloud payload is encrypted', cryptoRes.ciphertextOnly);
+
+  check('sameData ignores meta timestamps', await evaluate(`(() => {
+    const a = { settings: { x: 1 }, meta: { updated: 1 }, savings: [] };
+    const b = { settings: { x: 1 }, meta: { updated: 999, seenWelcome: true }, savings: [] };
+    return sameData(a, b) && !sameData(a, { settings: { x: 2 }, meta: { updated: 1 }, savings: [] });
+  })()`));
+
+  // --- cloud sync against a mocked Gist API ---
+  await evaluate(`(() => {
+    localStorage.removeItem('jack6.sync.v1');
+    window.__origFetch = window.fetch;
+    window.__gist = null;
+    window.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      const method = (opts.method || 'GET').toUpperCase();
+      const json = (body, status) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+      if (u === 'https://api.github.com/gists?per_page=100') return json(window.__gist ? [window.__gist] : [], 200);
+      if (u === 'https://api.github.com/gists' && method === 'POST') {
+        const body = JSON.parse(opts.body);
+        window.__gist = { id: 'g1', description: body.description, files: body.files };
+        return json(window.__gist, 201);
+      }
+      if (u === 'https://api.github.com/gists/g1' && method === 'PATCH') {
+        window.__gist.files = JSON.parse(opts.body).files;
+        return json(window.__gist, 200);
+      }
+      if (u === 'https://api.github.com/gists/g1') return json(window.__gist, 200);
+      return window.__origFetch(url, opts);
+    };
+    setSyncCfg({ enabled: true, token: 'ghp_testtoken', passphrase: 'secret123', gistId: '', lastSyncAt: 0 });
+  })()`);
+  await evaluate(`syncNow({ silent: true })`);
+  await sleep(600);
+  const pushed = await evaluate(`({
+    gistId: syncCfg().gistId,
+    status: syncState.status,
+    content: window.__gist && window.__gist.files['jack6-data.json'].content,
+    lastSyncAt: syncCfg().lastSyncAt
+  })`);
+  check('cloud sync creates gist', pushed.gistId === 'g1' && pushed.status === 'ok', JSON.stringify({ gistId: pushed.gistId, status: pushed.status }));
+  check('cloud upload is encrypted', !!pushed.content && !pushed.content.includes('savings') && !pushed.content.includes('存款'));
+  check('cloud upload records sync time', Number(pushed.lastSyncAt) > 0);
+
+  // remote gets a newer record: local unchanged since sync -> pull it
+  const pulled = await evaluate(`(async () => {
+    const copy = JSON.parse(JSON.stringify(db));
+    copy.savings.push({ id: 'cloud1', date: '2026-01-01', type: 'deposit', amount: 999, note: '云端记录' });
+    const plain = JSON.stringify({ app: 'jack6', version: 1, updatedAt: Date.now() + 60000, data: copy });
+    window.__gist.files['jack6-data.json'].content = await encryptPayload(plain, 'secret123');
+    await syncNow({ silent: true });
+    return { status: syncState.status, hasRecord: db.savings.some(s => s.note === '云端记录'), snaps: snapshots().some(s => s.reason === 'before-sync') };
+  })()`);
+  check('cloud pull applies remote data', pulled.status === 'ok' && pulled.hasRecord, JSON.stringify(pulled));
+  check('cloud pull snapshots local first', pulled.snaps);
+  await evaluate("setSyncCfg({ gistId: '' })");
+  check('cloud finds existing gist on new device', (await evaluate("findGist()")) === 'g1');
+  await evaluate("db.savings = db.savings.filter(s => s.note !== '云端记录'); setSyncCfg({ enabled: false }); save(); render()");
+
+  // --- cloud/snapshot rows on the "my" page ---
+  await evaluate(`location.hash='#/me'`);
+  await sleep(350);
+  check('cloud sync row present', await evaluate("!!document.querySelector('[data-act=\"cloud-sync\"]')"));
+  check('snapshots row present', await evaluate("!!document.querySelector('[data-act=\"open-snapshots\"]')"));
+
   // --- study ---
   await evaluate('sheetAddStudy()');
   await evaluate(`(() => { const f = document.querySelector('#sheet-form');
@@ -280,13 +361,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   check('check-update row present', await evaluate("!!document.querySelector('[data-act=\"check-update\"]')"));
 
   // --- persistence ---
-  await evaluate('save(); location.reload()');
+  await evaluate("localStorage.removeItem('jack6.sync.v1'); save(); location.reload()");
   await sleep(1500);
   check('persisted after reload', (await evaluate('db.savings.length')) === base.savings + 1);
   check('welcome not shown', (await evaluate('!document.querySelector(".sheet-overlay")')));
 
   // cleanup test records
-  await evaluate(`db.savings = db.savings.filter(r => r.note !== '测试存款'); db.expenses = db.expenses.filter(r => r.note !== '测试消费'); db.workouts = db.workouts.filter(r => !(r.exercises||[]).some(e => e.name === '测试深蹲') && !(r.activity === 'run' && r.distance === '7.2')); db.studies = db.studies.filter(r => r.content !== '测试学习'); db.readings = db.readings.filter(r => r.book !== '测试之书'); db.weights = db.weights.filter(r => !(r.weight === 71.8 && r.date === todayISO())); db.meals = db.meals.filter(r => r.name !== '测试午餐'); db.water = db.water.filter(r => r.ml !== 300); db.habits = db.habits.filter(r => r.name !== '测试习惯'); db.daily = db.daily.filter(r => r.happy !== '测试开心'); db.workouts = db.workouts.filter(w => w.source !== 'xiaomi'); db.health = []; db.weights = db.weights.filter(w => w.source !== 'xiaomi'); db.expenses = db.expenses.filter(e => e.source !== 'wechat'); db.settings.nickname = 'Jack'; db.settings.waterGoal = 2200; save(); render()`);
+  await evaluate(`db.savings = db.savings.filter(r => r.note !== '测试存款'); db.expenses = db.expenses.filter(r => r.note !== '测试消费'); db.workouts = db.workouts.filter(r => !(r.exercises||[]).some(e => e.name === '测试深蹲') && !(r.activity === 'run' && r.distance === '7.2')); db.studies = db.studies.filter(r => r.content !== '测试学习'); db.readings = db.readings.filter(r => r.book !== '测试之书'); db.weights = db.weights.filter(r => !(r.weight === 71.8 && r.date === todayISO())); db.meals = db.meals.filter(r => r.name !== '测试午餐'); db.water = db.water.filter(r => r.ml !== 300); db.habits = db.habits.filter(r => r.name !== '测试习惯'); db.daily = db.daily.filter(r => r.happy !== '测试开心'); db.workouts = db.workouts.filter(w => w.source !== 'xiaomi'); db.health = []; db.weights = db.weights.filter(w => w.source !== 'xiaomi'); db.expenses = db.expenses.filter(e => e.source !== 'wechat'); db.savings = db.savings.filter(r => r.note !== '云端记录'); db.settings.nickname = 'Jack'; db.settings.waterGoal = 2200; save(); localStorage.removeItem('jack6.sync.v1'); localStorage.removeItem('jack6.snaps.v1'); if (window.__origFetch) window.fetch = window.__origFetch; render()`);
 
   console.log('');
   const failed = results.filter((r) => !r.ok);

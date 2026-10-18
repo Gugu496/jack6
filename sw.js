@@ -1,11 +1,11 @@
 /* 六年之约 PWA service worker — offline shell */
 'use strict';
-const CACHE = 'jack6-v7';
+const CACHE = 'jack6-v8';
 const ASSETS = [
   './',
   './index.html',
-  './assets/style.css?v=7',
-  './assets/app.js?v=7',
+  './assets/style.css?v=8',
+  './assets/app.js?v=8',
   './manifest.webmanifest',
   './assets/icon.svg',
   './assets/icon-180.png',

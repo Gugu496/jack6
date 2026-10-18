@@ -245,15 +245,70 @@ function loadDB() {
   }
 }
 let db = loadDB();
-function save() {
+
+/* ------------------------------ snapshots ------------------------------ */
+const SNAP_KEY = 'jack6.snaps.v1';
+const SNAP_MAX = 8;
+const SNAP_REASONS = {
+  auto: '自动',
+  'before-import': '导入备份前',
+  'before-clear': '清空数据前',
+  'before-demo': '载入示例前',
+  'before-restore': '恢复历史版本前',
+  'before-sync': '云端覆盖前',
+  'before-cloud': '覆盖云端前',
+};
+function snapshots() {
+  try {
+    const a = JSON.parse(localStorage.getItem(SNAP_KEY) || '[]');
+    return Array.isArray(a) ? a.filter((s) => s && typeof s.data === 'string') : [];
+  } catch (e) { return []; }
+}
+function writeSnapshots(list) {
+  let keep = list.slice(-SNAP_MAX);
+  while (keep.length) {
+    try {
+      localStorage.setItem(SNAP_KEY, JSON.stringify(keep));
+      return;
+    } catch (e) {
+      keep = keep.slice(1); // storage full: drop the oldest and retry
+    }
+  }
+  try { localStorage.removeItem(SNAP_KEY); } catch (e) { /* ignore */ }
+}
+function pushSnapshot(dataJSON, reason) {
+  if (!dataJSON) return;
+  const list = snapshots();
+  if (list.length && list[list.length - 1].data === dataJSON) return;
+  list.push({ at: Date.now(), reason, data: dataJSON });
+  writeSnapshots(list);
+  lastSnapAt = Date.now();
+}
+function snapshot(reason) { pushSnapshot(JSON.stringify(db), reason); }
+let lastSnapAt = 0;
+
+let suppressCloudSync = false;
+function save(opts = {}) {
   db.meta.updated = Date.now();
   try {
     localStorage.setItem(DB_KEY, JSON.stringify(db));
+    if (!opts.noSnap && Date.now() - lastSnapAt > 5 * 60 * 1000) snapshot('auto');
+    if (!suppressCloudSync) scheduleCloudSync();
     return true;
   } catch (e) {
     toast('保存失败：手机存储空间可能已满');
     return false;
   }
+}
+
+/* Replace the whole database from a plain object (backup, snapshot, cloud). */
+function replaceDB(data, opts = {}) {
+  if (!data || typeof data !== 'object' || !data.settings) throw new Error('bad data');
+  localStorage.setItem(DB_KEY, JSON.stringify(data));
+  db = loadDB();
+  save({ noSnap: true });
+  render(true);
+  if (opts.toast) toast(opts.toast);
 }
 
 /* ------------------------------ derived data ------------------------------ */
@@ -410,6 +465,7 @@ const ICONS = {
   heart: '<path d="M20.3 5.7a5 5 0 0 0-7.1 0L12 6.9l-1.2-1.2a5 5 0 1 0-7.1 7.1L12 21l8.3-8.2a5 5 0 0 0 0-7.1z"/>',
   shoe: '<path d="M3.5 16.5v-3l2.5-.7 2.2-3.1 1.5.7-1 2.1 2.1.7 1.2-2.3 1.6.8-.6 2 4.3 1.5a2 2 0 0 1 1.2 1.8v1.5z"/><path d="M3.5 14.5h15"/>',
   chat: '<path d="M4 5.5h16v11H9l-5 4z"/><path d="M8 10h8M8 13.2h5"/>',
+  cloud: '<path d="M7 18.5h10a4 4 0 0 0 .7-7.94A6 6 0 0 0 6.2 9.6 4.3 4.3 0 0 0 7 18.5z"/><path d="M12 12v5m0-5 2.2 2.2M12 12l-2.2 2.2"/>',
   utensils: '<path d="M6 3v7a2 2 0 0 0 2 2h0a2 2 0 0 0 2-2V3M8 12v9M16 3c-1.4 1.2-2 2.8-2 4.6 0 1.7.7 2.8 2 3.4V21"/>',
   book: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5H6.5A2.5 2.5 0 0 0 4 21z"/><path d="M4 18.5A2.5 2.5 0 0 1 6.5 16H20"/>',
   target: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.6"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/>',
@@ -1893,6 +1949,8 @@ function meView() {
     <div class="section-head"><h3>数据管理</h3><span class="sub">只保存在这台设备</span></div>
     <div class="card list">
       <button class="setting-row" data-act="import-wechat"><div class="sr-main"><div class="sr-title">导入微信账单</div><div class="sr-sub">微信支付官方 CSV · 自动记入消费</div></div>${ic('chat', 18)}</button>
+      <button class="setting-row" data-act="cloud-sync"><div class="sr-main"><div class="sr-title">云端同步</div><div class="sr-sub">GitHub 私有 Gist · 加密后上传</div></div><span class="sr-val">${syncStatusText()}</span>${ic('cloud', 18)}</button>
+      <button class="setting-row" data-act="open-snapshots"><div class="sr-main"><div class="sr-title">历史版本</div><div class="sr-sub">自动保留最近 8 个，误操作可恢复</div></div><span class="sr-val">${snapshots().length} 个</span>${ic('clock', 18)}</button>
       <button class="setting-row" data-act="export"><div class="sr-main"><div class="sr-title">导出备份</div><div class="sr-sub">下载一个 JSON 文件，换手机不丢数据</div></div>${ic('download', 18)}</button>
       <button class="setting-row" data-act="import"><div class="sr-main"><div class="sr-title">导入备份</div><div class="sr-sub">从 JSON 文件恢复记录</div></div>${ic('upload', 18)}</button>
       <button class="setting-row" data-act="load-demo"><div class="sr-main"><div class="sr-title">载入示例数据</div><div class="sr-sub">预览完整功能，会覆盖当前数据</div></div>${ic('spark', 18)}</button>
@@ -1904,7 +1962,7 @@ function meView() {
 
   <div class="card quote mt16">
     <p>「把六年拆成 72 个月，再把今天过好。」</p>
-    <span>JACK · 六年之约 · v1.1</span>
+    <span>JACK · 六年之约 · v1.2</span>
   </div>
   <div class="small muted center mt12" style="padding-bottom:8px">所有数据仅保存在本机浏览器 · 记得定期导出备份</div>
   `;
@@ -2771,6 +2829,390 @@ function sheetSettings() {
 }
 
 /* ================================================================
+   CLOUD SYNC · private GitHub Gist, encrypted in the browser
+   ================================================================ */
+const SYNC_KEY = 'jack6.sync.v1';
+const SYNC_FILE = 'jack6-data.json';
+const SYNC_DESC = '六年之约 · encrypted data sync';
+const GIST_API = 'https://api.github.com';
+const DEFAULT_SYNC = { enabled: false, token: '', passphrase: '', gistId: '', lastSyncAt: 0 };
+
+let syncState = { status: 'idle', message: '' };
+let syncTimer = null;
+let pendingConflict = null;
+
+function syncCfg() {
+  try { return { ...DEFAULT_SYNC, ...JSON.parse(localStorage.getItem(SYNC_KEY) || '{}') }; }
+  catch (e) { return { ...DEFAULT_SYNC }; }
+}
+function setSyncCfg(patch) {
+  try { localStorage.setItem(SYNC_KEY, JSON.stringify({ ...syncCfg(), ...patch })); } catch (e) { /* ignore */ }
+}
+function syncReady(cfg = syncCfg()) { return !!(cfg.token && cfg.passphrase); }
+function fmtDateTime(ms) {
+  if (!ms) return '—';
+  const d = new Date(ms);
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+function syncStatusText() {
+  const cfg = syncCfg();
+  if (!cfg.enabled) return '未开启';
+  if (syncState.status === 'syncing') return '同步中…';
+  if (syncState.status === 'conflict') return '待选择';
+  if (syncState.status === 'error') return '失败';
+  if (cfg.lastSyncAt) return '上次 ' + fmtDateTime(cfg.lastSyncAt);
+  return '等待同步';
+}
+function isEmptyDB(d) {
+  return !((d.savings || []).length || (d.expenses || []).length || (d.workouts || []).length
+    || (d.studies || []).length || (d.readings || []).length || (d.daily || []).length
+    || (d.weights || []).length || (d.meals || []).length || (d.water || []).length
+    || (d.habits || []).length || (d.health || []).length);
+}
+function sameData(a, b) {
+  const strip = (o) => {
+    try {
+      const c = JSON.parse(JSON.stringify(o));
+      if (c.meta) { delete c.meta.updated; delete c.meta.seenWelcome; }
+      return JSON.stringify(c);
+    } catch (e) { return ''; }
+  };
+  return strip(a) === strip(b);
+}
+
+function b64encode(u8) {
+  let s = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < u8.length; i += chunk) s += String.fromCharCode.apply(null, u8.subarray(i, i + chunk));
+  return btoa(s);
+}
+function b64decode(str) {
+  const bin = atob(str);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
+}
+async function syncKey(passphrase) {
+  if (!window.crypto || !crypto.subtle) throw new Error('当前环境不支持加密，请用 https 地址打开');
+  const raw = await crypto.subtle.importKey('raw', new TextEncoder().encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: new TextEncoder().encode('jack6-gist-v1'), iterations: 150000, hash: 'SHA-256' },
+    raw, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+  );
+}
+async function encryptPayload(plain, passphrase) {
+  const key = await syncKey(passphrase);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const buf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(plain));
+  return JSON.stringify({ format: 'jack6-enc-v1', iv: b64encode(iv), data: b64encode(new Uint8Array(buf)) });
+}
+async function decryptPayload(text, passphrase) {
+  let box;
+  try { box = JSON.parse(text); } catch (e) { throw new Error('云端文件格式不对'); }
+  if (!box || box.format !== 'jack6-enc-v1') throw new Error('云端文件不是加密同步文件');
+  const key = await syncKey(passphrase);
+  const buf = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: b64decode(box.iv) }, key, b64decode(box.data)
+  );
+  return new TextDecoder().decode(buf);
+}
+
+async function gistCall(path, opts = {}) {
+  const cfg = syncCfg();
+  const headers = {
+    Authorization: 'Bearer ' + cfg.token,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+  if (opts.body) headers['Content-Type'] = 'application/json';
+  let res;
+  try {
+    res = await fetch(GIST_API + path, { ...opts, headers, cache: 'no-store' });
+  } catch (e) {
+    throw new Error('连不上 GitHub，检查网络后重试');
+  }
+  const text = await res.text();
+  let json = null;
+  try { json = text ? JSON.parse(text) : null; } catch (e) { /* ignore */ }
+  if (!res.ok) {
+    const msg = res.status === 401 ? 'GitHub Token 无效或已过期'
+      : res.status === 403 ? 'GitHub 拒绝访问，检查 Token 是否勾选 gist'
+        : (json && json.message) || ('GitHub ' + res.status);
+    const err = new Error(msg);
+    err.status = res.status;
+    throw err;
+  }
+  return json;
+}
+
+async function findGist() {
+  const cfg = syncCfg();
+  if (cfg.gistId) return cfg.gistId;
+  const list = await gistCall('/gists?per_page=100');
+  const hit = (list || []).find((g) => g.description === SYNC_DESC);
+  if (hit) { setSyncCfg({ gistId: hit.id }); return hit.id; }
+  return '';
+}
+
+async function ensureGist() {
+  const found = await findGist();
+  if (found) return found;
+  const created = await gistCall('/gists', {
+    method: 'POST',
+    body: JSON.stringify({ description: SYNC_DESC, public: false, files: { [SYNC_FILE]: { content: '{}' } } }),
+  });
+  setSyncCfg({ gistId: created.id });
+  return created.id;
+}
+
+async function readRemote() {
+  const cfg = syncCfg();
+  if (!cfg.gistId) return null;
+  try {
+    const g = await gistCall('/gists/' + cfg.gistId);
+    const file = g.files && g.files[SYNC_FILE];
+    if (!file) return null;
+    let content = file.content;
+    if (file.truncated && file.raw_url) {
+      const r = await fetch(file.raw_url, { headers: { Authorization: 'Bearer ' + cfg.token } });
+      if (!r.ok) throw new Error('读取云端文件失败');
+      content = await r.text();
+    }
+    if (!content || !content.trim() || content.trim() === '{}') return null;
+    const plain = await decryptPayload(content, cfg.passphrase);
+    const payload = JSON.parse(plain);
+    if (!payload || !payload.data || !payload.data.settings) return null;
+    return payload;
+  } catch (e) {
+    if (e.status === 404) { setSyncCfg({ gistId: '' }); return null; }
+    if (e && /OperationError|DataError/.test(e.name || '')) throw new Error('同步口令不对，解不开云端备份');
+    throw e;
+  }
+}
+
+async function writeRemote() {
+  const cfg = syncCfg();
+  await ensureGist();
+  const plain = JSON.stringify({ app: 'jack6', version: 1, updatedAt: db.meta.updated, data: db });
+  const content = await encryptPayload(plain, cfg.passphrase);
+  await gistCall('/gists/' + syncCfg().gistId, {
+    method: 'PATCH',
+    body: JSON.stringify({ files: { [SYNC_FILE]: { content } } }),
+  });
+  setSyncCfg({ lastSyncAt: Date.now() });
+}
+
+function adoptRemote(remote) {
+  pushSnapshot(JSON.stringify(remote.data), 'before-sync');
+  suppressCloudSync = true;
+  try {
+    replaceDB(remote.data, { toast: '已从云端同步最新数据' });
+  } finally {
+    suppressCloudSync = false;
+  }
+  pendingConflict = null;
+  setSyncCfg({ lastSyncAt: Date.now() });
+  syncState = { status: 'ok', message: '已从云端更新' };
+  render(true);
+}
+
+function useLocalOverCloud(remote) {
+  pushSnapshot(JSON.stringify(remote.data), 'before-cloud');
+  pendingConflict = null;
+  syncState = { status: 'syncing', message: '正在上传…' };
+  render();
+  writeRemote().then(() => {
+    syncState = { status: 'ok', message: '已用本地覆盖云端' };
+    toast('已覆盖云端，云端旧版本保存在历史版本里');
+    render();
+  }).catch((e) => {
+    syncState = { status: 'error', message: e.message };
+    toast('上传失败：' + e.message);
+    render();
+  });
+}
+
+function showSyncConflict() {
+  const remote = pendingConflict;
+  if (!remote) return;
+  const r = remote.data;
+  const line = (label, d, at) => `<div class="flex" style="justify-content:space-between"><b>${label}</b><span class="small muted">${fmtDateTime(at)} · 存款 ${(d.savings || []).length} · 消费 ${(d.expenses || []).length} · 训练 ${(d.workouts || []).length}</span></div>`;
+  openSheet({
+    title: '云端和本地都有新数据',
+    subtitle: '选一个作为当前数据，另一份会存进历史版本',
+    body: `
+      <div class="card card-pad">
+        ${line('云端', r, remote.updatedAt)}
+        <div class="mt12"></div>
+        ${line('本地', db, db.meta.updated)}
+      </div>
+      <div class="small muted mt12">「使用云端」会用云端记录覆盖本地；「保留本地并上传」会用当前记录覆盖云端。两种操作都能在「历史版本」里找回。</div>
+    `,
+    submit: '使用云端数据',
+    secondary: '保留本地并上传',
+    onSubmit() { adoptRemote(remote); },
+    onSecondary() { useLocalOverCloud(remote); },
+  });
+}
+
+async function syncNow(opts = {}) {
+  const cfg = syncCfg();
+  const notify = !opts.silent;
+  if (!cfg.enabled) { if (notify) toast('先在「我的 → 云端同步」里开启'); return; }
+  if (!syncReady(cfg)) { if (notify) toast('请先填写 GitHub Token 和同步口令'); return; }
+  if (!navigator.onLine) {
+    syncState = { status: 'offline', message: '离线' };
+    if (notify) toast('当前没有网络，联网后会自动同步');
+    return;
+  }
+  if (syncState.status === 'syncing') return;
+  syncState = { status: 'syncing', message: '同步中…' };
+  if (notify) toast('正在同步…');
+  render();
+  try {
+    // On a new device the gist id is unknown: look it up before reading, so an
+    // empty local database can never overwrite the existing cloud backup.
+    if (!syncCfg().gistId) await findGist();
+    const remote = await readRemote();
+    if (!remote) {
+      await writeRemote();
+      syncState = { status: 'ok', message: '已上传到云端' };
+      if (notify) toast('已备份到云端');
+      render();
+      return;
+    }
+    if (sameData(remote.data, db)) {
+      setSyncCfg({ lastSyncAt: Date.now() });
+      syncState = { status: 'ok', message: '已是最新' };
+      if (notify) toast('云端和本地已是最新');
+      render();
+      return;
+    }
+    const localUpdated = Number(db.meta.updated) || 0;
+    const remoteUpdated = Number(remote.updatedAt) || Number(remote.data.meta && remote.data.meta.updated) || 0;
+    const lastSync = Number(cfg.lastSyncAt) || 0;
+    const localChanged = localUpdated > lastSync;
+    const remoteChanged = remoteUpdated > lastSync;
+
+    if (isEmptyDB(db)) { adoptRemote(remote); return; }
+    if (localChanged && remoteChanged) {
+      pendingConflict = remote;
+      syncState = { status: 'conflict', message: '需要选择版本' };
+      render();
+      showSyncConflict();
+      return;
+    }
+    if (remoteChanged || remoteUpdated > localUpdated) { adoptRemote(remote); return; }
+    if (localUpdated > remoteUpdated) {
+      pushSnapshot(JSON.stringify(remote.data), 'before-cloud');
+      await writeRemote();
+      syncState = { status: 'ok', message: '已上传' };
+      if (notify) toast('已同步到云端');
+      render();
+      return;
+    }
+    setSyncCfg({ lastSyncAt: Date.now() });
+    syncState = { status: 'ok', message: '已是最新' };
+    render();
+  } catch (e) {
+    syncState = { status: 'error', message: e.message || '同步失败' };
+    if (notify) toast('同步失败：' + (e.message || '未知错误'));
+    render();
+  }
+}
+
+function scheduleCloudSync() {
+  const cfg = syncCfg();
+  if (!cfg.enabled || !syncReady(cfg)) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => { syncNow({ silent: true }); }, 3500);
+}
+
+function sheetCloudSync() {
+  const cfg = syncCfg();
+  const status = syncState.status === 'error' ? syncState.message
+    : syncState.status === 'conflict' ? '云端和本地都有新数据，同步时会让你选择'
+      : cfg.lastSyncAt ? '上次同步 ' + fmtDateTime(cfg.lastSyncAt) : '尚未同步过';
+  openSheet({
+    title: '云端同步',
+    subtitle: 'GitHub 私有 Gist · 数据加密后上传',
+    submit: '保存并同步',
+    secondary: '立即同步',
+    body: `
+      <div class="notice">${ic('info', 16)}<div>记录会在本机用口令加密，再存进你 GitHub 账号下的一个私有 Gist。GitHub 上只能看到密文，看不到金额、体重等内容。</div></div>
+      ${field('GitHub Token', `<input class="input" type="password" name="token" value="${esc(cfg.token)}" placeholder="ghp_... / github_pat_..." autocomplete="off" spellcheck="false">`, 'GitHub → Settings → Developer settings → Personal access tokens → 生成一个只勾选 <b>gist</b> 的 Token。')}
+      ${field('同步口令', `<input class="input" type="password" name="passphrase" value="${esc(cfg.passphrase)}" placeholder="至少 6 位，自己记牢" autocomplete="off">`, '换手机时输入同一个口令才能解密云端数据；忘记口令不会影响本地记录。')}
+      <label class="chip" style="display:flex;margin-top:4px"><input type="checkbox" name="enabled" ${cfg.enabled ? 'checked' : ''}> 自动同步（改动后 3 秒上传，打开应用时拉取）</label>
+      ${cfg.gistId ? `<div class="small muted mt12">Gist ID：${esc(cfg.gistId)}</div>` : ''}
+      <div class="small muted mt12">状态：${esc(status)}</div>
+      ${cfg.token ? '<button type="button" class="btn btn-ghost btn-sm mt16" data-act="sync-forget">关闭同步并清除本机的 Token</button>' : ''}
+    `,
+    onSubmit(form, data) {
+      const token = textVal(data, 'token').trim();
+      const passphrase = textVal(data, 'passphrase');
+      if (token && !/^gh[pousr]_|^github_pat_/.test(token)) { toast('Token 格式看起来不对'); return false; }
+      if (passphrase && passphrase.length < 6) { toast('同步口令至少 6 位'); return false; }
+      if (cfg.passphrase && passphrase !== cfg.passphrase) { toast('要换口令，请先关闭同步再重新设置'); return false; }
+      if (data.get('enabled') && (!token || !passphrase)) { toast('自动同步需要同时填写 Token 和口令'); return false; }
+      if (token !== cfg.token) setSyncCfg({ gistId: '' });
+      setSyncCfg({ token, passphrase, enabled: !!data.get('enabled') });
+      syncState = { status: 'idle', message: '' };
+      toast('同步设置已保存');
+      if (token && passphrase) setTimeout(() => syncNow(), 300);
+    },
+    onSecondary() {
+      setTimeout(() => syncNow(), 100);
+    },
+  });
+}
+
+/* ------------------------------ snapshot UI ------------------------------ */
+function sheetSnapshots() {
+  const list = snapshots().slice().reverse();
+  const body = list.length ? list.map((s) => {
+    let counts = '—';
+    try {
+      const d = JSON.parse(s.data);
+      counts = `存款 ${(d.savings || []).length} · 消费 ${(d.expenses || []).length} · 训练 ${(d.workouts || []).length}`;
+    } catch (e) { /* ignore */ }
+    return `<div class="card card-pad" style="margin-bottom:10px">
+      <div class="flex" style="justify-content:space-between;align-items:center"><b>${fmtDateTime(s.at)}</b><span class="tag">${SNAP_REASONS[s.reason] || s.reason || '快照'}</span></div>
+      <div class="small muted mt6">${counts}</div>
+      <div class="flex mt12" style="gap:8px">
+        <button type="button" class="btn btn-sm btn-primary" data-act="snap-restore" data-at="${s.at}">恢复这一版</button>
+        <button type="button" class="btn btn-sm btn-ghost" data-act="snap-del" data-at="${s.at}">删除</button>
+      </div>
+    </div>`;
+  }).join('') : emptyState('clock', '还没有历史版本', '每次保存和覆盖前会自动留一份，最多保留 8 个。');
+  openSheet({ title: '历史版本', subtitle: '误点导入 / 清空后可以在这里找回', body, submit: '完成' });
+}
+
+function restoreSnapshot(at) {
+  const s = snapshots().find((x) => x.at === at);
+  if (!s) { toast('这个快照已经不存在'); return; }
+  let data;
+  try { data = JSON.parse(s.data); } catch (e) { toast('快照已损坏'); return; }
+  confirmDialog({
+    title: '恢复这个版本？',
+    text: `${fmtDateTime(s.at)} 的记录会覆盖当前数据。当前数据会先存进历史版本。`,
+    ok: '恢复',
+    danger: false,
+    icon: 'clock',
+    onConfirm() {
+      snapshot('before-restore');
+      replaceDB(data, { toast: '已恢复历史版本' });
+    },
+  });
+}
+
+function deleteSnapshot(at) {
+  writeSnapshots(snapshots().filter((s) => s.at !== at));
+  closeSheet();
+  render();
+  toast('快照已删除');
+}
+
+/* ================================================================
    WELCOME · DEMO · DATA
    ================================================================ */
 function showWelcome() {
@@ -2810,6 +3252,7 @@ const randInt = (a, b) => Math.floor(rnd(a, b + 1));
 
 function loadDemo() {
   closeSheet();
+  if (!isEmptyDB(db)) snapshot('before-demo');
   const today = todayISO();
   const fresh = defaultDB();
   fresh.meta.seenWelcome = true;
@@ -3071,10 +3514,8 @@ function importFile(file) {
         danger: false,
         icon: 'upload',
         onConfirm() {
-          localStorage.setItem(DB_KEY, JSON.stringify(data));
-          db = loadDB();
-          render(true);
-          toast('备份已导入');
+          snapshot('before-import');
+          replaceDB(data, { toast: '备份已导入' });
         },
       });
     } catch (e) {
@@ -3090,6 +3531,7 @@ function clearAllData() {
     text: '所有记录都会被删除，且无法恢复。建议先导出备份。',
     ok: '全部清空',
     onConfirm() {
+      snapshot('before-clear');
       const theme = db.settings.theme;
       db = defaultDB();
       db.settings.theme = theme;
@@ -3278,6 +3720,25 @@ document.addEventListener('click', (e) => {
     case 'check-update':
       hardRefresh();
       break;
+    case 'cloud-sync':
+      sheetCloudSync();
+      break;
+    case 'open-snapshots':
+      sheetSnapshots();
+      break;
+    case 'snap-restore':
+      restoreSnapshot(Number(el.dataset.at));
+      break;
+    case 'snap-del':
+      deleteSnapshot(Number(el.dataset.at));
+      break;
+    case 'sync-forget':
+      localStorage.removeItem(SYNC_KEY);
+      closeSheet();
+      syncState = { status: 'idle', message: '' };
+      render();
+      toast('已关闭云端同步，云端数据仍保留在 GitHub');
+      break;
     case 'load-demo': {
       const has = db.savings.length || db.expenses.length || db.workouts.length || db.studies.length || db.readings.length || db.daily.length;
       if (!has) loadDemo();
@@ -3392,6 +3853,11 @@ function init() {
   if (!location.hash) history.replaceState(null, '', '#/home');
   render();
   registerSW();
+  const cfg = syncCfg();
+  if (cfg.enabled && syncReady(cfg)) {
+    setTimeout(() => syncNow({ silent: true }), 1500);
+    window.addEventListener('online', () => syncNow({ silent: true }));
+  }
 }
 
 init();
