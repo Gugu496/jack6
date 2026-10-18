@@ -85,6 +85,14 @@ async function getWs() {
       JSON.stringify({ steps: 12345, distance: 8900, calories: 430, active_minutes: 55, sleep_minutes: 440, sleep_score: 84, resting_hr: 57 }).replace(/"/g, '""') +
       '",' + time + '\\n', 'y_aggregated_fitness_data.csv'));
   })()`);
+  await evaluate(`(() => {
+    const d = todayISO();
+    const csv = '交易时间,交易类型,交易对方,商品,收/支,金额(元),支付方式,当前状态,交易单号,商户单号,备注\\n' +
+      d + ' 12:30:00,商户消费,美团外卖,午餐,支出,¥35.50,零钱,支付成功,wx1,m1,\\n' +
+      d + ' 18:10:00,商户消费,滴滴出行,快车,支出,¥18.00,银行卡,支付成功,wx2,m2,\\n' +
+      d + ' 20:00:00,商户消费,京东,耳机,支出,"¥1,299.00",零钱,支付成功,wx3,m3,\\n';
+    applyWechatImport(parseWechatText(csv));
+  })()`);
   await sleep(600);
   await shot('02-home-watch');
 
@@ -110,6 +118,8 @@ async function getWs() {
   await shot('32-sheet-settings');
   await evaluate('closeSheet(); sheetImportWatch()');
   await shot('33-sheet-watch-import');
+  await evaluate('closeSheet(); sheetImportWechat()');
+  await shot('34-sheet-wechat-import');
 
   // dark mode home
   await evaluate("closeSheet(); db.settings.theme='dark'; applyTheme(); location.hash='#/home'; render(true)");

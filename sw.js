@@ -1,6 +1,6 @@
 /* 六年之约 PWA service worker — offline shell */
 'use strict';
-const CACHE = 'jack6-v4';
+const CACHE = 'jack6-v5';
 const ASSETS = [
   './',
   './index.html',

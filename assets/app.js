@@ -408,6 +408,7 @@ const ICONS = {
   watch: '<rect x="6.5" y="6.5" width="11" height="11" rx="3"/><path d="M9.5 6.5 9 3.5h6l-.5 3M9.5 17.5 9 20.5h6l-.5-3"/>',
   heart: '<path d="M20.3 5.7a5 5 0 0 0-7.1 0L12 6.9l-1.2-1.2a5 5 0 1 0-7.1 7.1L12 21l8.3-8.2a5 5 0 0 0 0-7.1z"/>',
   shoe: '<path d="M3.5 16.5v-3l2.5-.7 2.2-3.1 1.5.7-1 2.1 2.1.7 1.2-2.3 1.6.8-.6 2 4.3 1.5a2 2 0 0 1 1.2 1.8v1.5z"/><path d="M3.5 14.5h15"/>',
+  chat: '<path d="M4 5.5h16v11H9l-5 4z"/><path d="M8 10h8M8 13.2h5"/>',
   utensils: '<path d="M6 3v7a2 2 0 0 0 2 2h0a2 2 0 0 0 2-2V3M8 12v9M16 3c-1.4 1.2-2 2.8-2 4.6 0 1.7.7 2.8 2 3.4V21"/>',
   book: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5H6.5A2.5 2.5 0 0 0 4 21z"/><path d="M4 18.5A2.5 2.5 0 0 1 6.5 16H20"/>',
   target: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.6"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/>',
@@ -927,7 +928,7 @@ function expensesView() {
       return `<div class="row">
         <div class="row-ic">${c.emoji}</div>
         <div class="row-main">
-          <div class="row-title">${esc(e.note || c.name)}</div>
+          <div class="row-title">${esc(e.note || c.name)}${e.source === 'wechat' ? '<span class="tag gold" style="margin-left:6px">微信</span>' : ''}</div>
           <div class="row-sub">${c.name}${e.note ? ' · ' + fmtDate(e.date) : ''}</div>
         </div>
         <div class="row-amt">${fmtMoney(e.amount)}</div>
@@ -937,7 +938,7 @@ function expensesView() {
   `).join('');
 
   return `
-  ${pageHead('消费', '看清楚钱去了哪里，才有得选', addBtn('记一笔', 'expense'))}
+  ${pageHead('消费', '看清楚钱去了哪里，才有得选', `<div class="flex" style="gap:12px;align-items:center"><button class="head-action" data-act="import-wechat">导入微信账单</button>${addBtn('记一笔', 'expense')}</div>`)}
   ${moneySeg('expenses')}
 
   <div class="card card-pad">
@@ -1438,7 +1439,7 @@ function watchTsToISO(v) {
 }
 
 /* RFC4180-ish CSV parser: handles quotes, escaped quotes, CRLF and BOM. */
-function parseWatchCSV(text) {
+function parseCSVRows(text) {
   const src = String(text).replace(/^﻿/, '');
   const rows = [];
   let row = [], cur = '', quoted = false;
@@ -1454,7 +1455,11 @@ function parseWatchCSV(text) {
     else if (c !== '\r') cur += c;
   }
   if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+  return rows;
+}
 
+function parseWatchCSV(text) {
+  const rows = parseCSVRows(text);
   let hi = -1;
   for (let i = 0; i < Math.min(rows.length, 30); i++) {
     const n = rows[i].map(normKey);
@@ -1885,6 +1890,7 @@ function meView() {
   <div class="section">
     <div class="section-head"><h3>数据管理</h3><span class="sub">只保存在这台设备</span></div>
     <div class="card list">
+      <button class="setting-row" data-act="import-wechat"><div class="sr-main"><div class="sr-title">导入微信账单</div><div class="sr-sub">微信支付官方 CSV · 自动记入消费</div></div>${ic('chat', 18)}</button>
       <button class="setting-row" data-act="export"><div class="sr-main"><div class="sr-title">导出备份</div><div class="sr-sub">下载一个 JSON 文件，换手机不丢数据</div></div>${ic('download', 18)}</button>
       <button class="setting-row" data-act="import"><div class="sr-main"><div class="sr-title">导入备份</div><div class="sr-sub">从 JSON 文件恢复记录</div></div>${ic('upload', 18)}</button>
       <button class="setting-row" data-act="load-demo"><div class="sr-main"><div class="sr-title">载入示例数据</div><div class="sr-sub">预览完整功能，会覆盖当前数据</div></div>${ic('spark', 18)}</button>
@@ -2202,6 +2208,177 @@ function sheetAddExpense() {
       db.expenses.push({ id: uid(), date: data.get('date') || todayISO(), cat: data.get('cat') || 'other', amount, note: textVal(data, 'note') });
       save(); render();
       toast('已记录消费 ' + fmtMoney(amount));
+    },
+  });
+}
+
+/* ---------- WeChat Pay bill import ---------- */
+const WECHAT_CAT_RULES = [
+  [/滴滴|打车|出行|地铁|公交|铁路|12306|高铁|火车|航空|机票|加油|停车|单车|骑行|哈啰|青桔|充电桩|ETC|过路费/i, 'traffic'],
+  [/美团|饿了么|外卖|餐饮|餐|饭|面|粉|烧烤|火锅|咖啡|奶茶|茶饮|星巴克|瑞幸|麦当劳|肯德基|必胜客|食堂|小吃|烘焙|面包|水果/i, 'food'],
+  [/书店|图书|课程|教育|培训|考试|学费|知识|得到|极客时间/i, 'study'],
+  [/电影|影院|游戏|steam|演出|话剧|票务|ktv|酒吧|视频会员|音乐会员|娱乐/i, 'fun'],
+  [/房租|物业|水费|电费|燃气|宽带|家政|维修|生活缴费/i, 'home'],
+  [/医院|诊所|体检|口腔|医疗|挂号|药/i, 'health'],
+  [/淘宝|天猫|京东|拼多多|商城|商场|超市|便利店|优衣库|服饰|鞋|数码|小米|苹果|购物|日用品|家居/i, 'shop'],
+];
+function wechatCategory(text) {
+  for (const [re, id] of WECHAT_CAT_RULES) if (re.test(text)) return id;
+  return 'other';
+}
+function wechatAmount(v) {
+  const n = Number(String(v == null ? '' : v).replace(/[^\d.]/g, ''));
+  return isFinite(n) ? Math.round(Math.abs(n) * 100) / 100 : 0;
+}
+
+function parseWechatText(text) {
+  const rows = parseCSVRows(text);
+  let hi = -1;
+  for (let i = 0; i < Math.min(rows.length, 40); i++) {
+    const line = rows[i].join('|');
+    if (line.includes('交易时间') && line.includes('金额')) { hi = i; break; }
+  }
+  if (hi < 0) return { items: [], rows: 0, skipped: 0, income: 0, refunds: 0, transfers: 0 };
+  const head = rows[hi].map((h) => String(h).replace(/\s+/g, ''));
+  const find = (...names) => head.findIndex((h) => names.some((n) => h.includes(n)));
+  const iTime = find('交易时间');
+  const iType = find('交易类型');
+  const iParty = find('交易对方');
+  const iGoods = find('商品');
+  const iDir = find('收/支');
+  const iAmount = find('金额');
+  const iPay = find('支付方式');
+  const iStatus = find('当前状态');
+  const iOrder = find('交易单号');
+  const iRemark = find('备注');
+  const cell = (r, j) => (j >= 0 && r[j] != null ? String(r[j]).trim() : '');
+
+  const stats = { items: [], rows: 0, skipped: 0, income: 0, refunds: 0, transfers: 0 };
+  for (let i = hi + 1; i < rows.length; i++) {
+    const r = rows[i];
+    if (!r || !r.some((c) => String(c).trim())) continue;
+    stats.rows++;
+    const direction = cell(r, iDir);
+    if (direction.includes('收入')) { stats.income++; continue; }
+    if (!direction.includes('支出')) { stats.skipped++; continue; }
+
+    const status = cell(r, iStatus);
+    if (/退款|撤销|失败/.test(status)) { stats.refunds++; continue; }
+
+    const type = cell(r, iType);
+    const party = cell(r, iParty);
+    const goods = cell(r, iGoods);
+    const remark = cell(r, iRemark);
+    if (/转账|红包|提现|零钱充值|零钱通|理财通|基金|信用卡还款|还款/i.test(type + ' ' + party)) {
+      stats.transfers++; continue;
+    }
+
+    const date = cell(r, iTime).slice(0, 10);
+    const amount = wechatAmount(cell(r, iAmount));
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || amount <= 0) { stats.skipped++; continue; }
+
+    const label = [party, goods].filter(Boolean).join(' · ') || type || '微信支付';
+    const extId = cell(r, iOrder) || [date, amount, party, goods, i].join('|');
+    stats.items.push({
+      id: uid(),
+      date,
+      cat: wechatCategory([type, party, goods, remark].join(' ')),
+      amount,
+      note: label.slice(0, 60),
+      source: 'wechat',
+      extId,
+      payMethod: cell(r, iPay),
+      tradeType: type,
+    });
+  }
+  return stats;
+}
+
+function applyWechatImport(parsed) {
+  if (!parsed) return { added: 0, dup: 0 };
+  const seen = new Set(db.expenses.filter((e) => e.source === 'wechat').map((e) => String(e.extId)));
+  let added = 0, dup = 0;
+  for (const item of parsed.items || []) {
+    if (seen.has(String(item.extId))) { dup++; continue; }
+    db.expenses.push(item);
+    seen.add(String(item.extId));
+    added++;
+  }
+  if (added) save();
+  render();
+  if (added) toast(`已导入 ${added} 笔微信账单${dup ? `，跳过 ${dup} 笔重复` : ''}`);
+  else if (dup) toast('这些账单之前已经导入过');
+  else toast('没有识别到可导入的支出');
+  return { added, dup };
+}
+
+function readTextFileSmart(file, done) {
+  if (file.size > 50 * 1024 * 1024) { toast('文件太大，请选择微信导出的 CSV 账单'); return; }
+  const reader = new FileReader();
+  reader.onload = () => {
+    let text = new TextDecoder('utf-8').decode(reader.result);
+    if (text.includes('�')) {
+      try { text = new TextDecoder('gb18030').decode(reader.result); } catch (e) { /* keep utf-8 */ }
+    }
+    done(text, file.name);
+  };
+  reader.onerror = () => toast('读取文件失败，请再试一次');
+  reader.readAsArrayBuffer(file);
+}
+
+function sheetImportWechat() {
+  openSheet({
+    title: '导入微信账单',
+    subtitle: '微信支付官方账单 · 本地解析',
+    submit: '导入支出',
+    body: `
+      ${field('选择账单文件', `<input class="input" type="file" id="wechat-file" accept=".csv,.txt,text/csv,text/plain">
+        <div class="hint">微信「账单下载 → 用于个人对账」得到的 CSV。压缩包解压后选择其中的 CSV 文件。</div>`)}
+      <div id="wechat-preview" class="form-note">还没有选择文件</div>
+      <div class="divider"></div>
+      <div class="field-label">怎么导出</div>
+      <ol class="watch-steps">
+        <li>微信 → 我 → 服务 → 钱包 → 账单</li>
+        <li>右上角「常见问题 / ⋯」→ 账单下载</li>
+        <li>选择「用于个人对账」，选好时间范围，填邮箱</li>
+        <li>邮箱收到加密压缩包，密码会通过微信支付消息发送</li>
+        <li>解压后回到这里，选择 CSV 文件</li>
+      </ol>
+      <div class="form-note mt8">只导入「支出」。转账、红包、提现、还款、退款不会计入消费。文件只在本机解析，不会上传；重复导入按交易单号自动去重。</div>
+    `,
+    afterMount(form) {
+      const input = form.querySelector('#wechat-file');
+      const preview = form.querySelector('#wechat-preview');
+      form.__wechatParsed = null;
+      input.addEventListener('change', () => {
+        const f = input.files && input.files[0];
+        if (!f) return;
+        form.__wechatParsed = null;
+        preview.textContent = '正在解析…';
+        readTextFileSmart(f, (text) => {
+          try {
+            const parsed = parseWechatText(text);
+            form.__wechatParsed = parsed;
+            if (parsed.items.length) {
+              const total = parsed.items.reduce((a, b) => a + b.amount, 0);
+              const dates = parsed.items.map((x) => x.date).sort();
+              const skipped = [];
+              if (parsed.income) skipped.push(`${parsed.income} 笔收入`);
+              if (parsed.refunds) skipped.push(`${parsed.refunds} 笔退款`);
+              if (parsed.transfers) skipped.push(`${parsed.transfers} 笔转账/红包/还款`);
+              preview.innerHTML = `识别到 <b>${parsed.items.length}</b> 笔支出，合计 <b>${fmtMoney(total)}</b><br>范围：${dates[0]} → ${dates[dates.length - 1]}${skipped.length ? `<br>已跳过：${skipped.join('、')}` : ''}`;
+            } else {
+              preview.innerHTML = '没有识别到支出记录。请确认选择的是微信「用于个人对账」导出的 CSV 文件。';
+            }
+          } catch (err) {
+            preview.textContent = '解析失败，请确认文件格式';
+          }
+        });
+      });
+    },
+    onSubmit(form) {
+      if (!form.__wechatParsed) { toast('先选择一个账单文件，等识别完成'); return false; }
+      applyWechatImport(form.__wechatParsed);
     },
   });
 }
@@ -3091,6 +3268,9 @@ document.addEventListener('click', (e) => {
       break;
     case 'import-watch':
       sheetImportWatch();
+      break;
+    case 'import-wechat':
+      sheetImportWechat();
       break;
     case 'load-demo': {
       const has = db.savings.length || db.expenses.length || db.workouts.length || db.studies.length || db.readings.length || db.daily.length;

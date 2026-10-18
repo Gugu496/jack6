@@ -156,6 +156,33 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const wh = await evaluate("db.health.find(h => h.date === '2026-10-14')");
   check('watch daily imported', healthRes.health === 1 && wh && wh.steps === 12345 && wh.sleepMinutes === 440 && wh.restingHr === 57, JSON.stringify(wh));
 
+  // --- WeChat Pay bill import ---
+  const wechatCsv = `微信支付账单明细
+微信昵称：[Jack]
+----------------------微信支付账单明细列表--------------------
+交易时间,交易类型,交易对方,商品,收/支,金额(元),支付方式,当前状态,交易单号,商户单号,备注
+2026-10-16 12:30:00,商户消费,美团外卖,午餐,支出,¥35.50,零钱,支付成功,4200001,M1,
+2026-10-16 18:00:00,转账,张三,转账,支出,¥200.00,零钱,已转账,4200002,,朋友还款
+2026-10-15 08:00:00,商户消费,滴滴出行,快车,支出,¥18.00,银行卡,支付成功,4200003,M3,
+2026-10-15 20:00:00,商户消费,某超市,日用品,支出,¥88.00,零钱,已全额退款,4200004,M4,
+2026-10-14 10:00:00,商户消费,京东,耳机,支出,"¥1,299.00",零钱,支付成功,4200005,M5,
+2026-10-14 11:00:00,转账,李四,收款,收入,¥500.00,零钱,已收钱,4200006,,,
+`;
+  const wxParsed = await evaluate(`parseWechatText(${JSON.stringify(wechatCsv)})`);
+  check('wechat rows parsed', wxParsed && wxParsed.items.length === 3, JSON.stringify(wxParsed));
+  check('wechat skips income/refund/transfer', wxParsed.income === 1 && wxParsed.refunds === 1 && wxParsed.transfers === 1, JSON.stringify(wxParsed));
+  const wxImport = await evaluate(`applyWechatImport(parseWechatText(${JSON.stringify(wechatCsv)}))`);
+  check('wechat expenses imported', wxImport.added === 3, JSON.stringify(wxImport));
+  const wxRows = await evaluate(`db.expenses.filter(e => e.source === 'wechat')`);
+  check('wechat categories', wxRows.map(r => r.cat).sort().join(',') === 'food,shop,traffic', JSON.stringify(wxRows.map(r => r.cat)));
+  check('wechat comma amount', wxRows.some(r => r.amount === 1299), JSON.stringify(wxRows.map(r => r.amount)));
+  const wxAgain = await evaluate(`applyWechatImport(parseWechatText(${JSON.stringify(wechatCsv)}))`);
+  check('wechat import deduped', wxAgain.added === 0 && wxAgain.dup === 3, JSON.stringify(wxAgain));
+
+  await evaluate(`location.hash='#/expenses'`);
+  await sleep(400);
+  check('wechat tag rendered', await evaluate("document.querySelector('#view').innerHTML.includes('微信')"));
+
   // --- study ---
   await evaluate('sheetAddStudy()');
   await evaluate(`(() => { const f = document.querySelector('#sheet-form');
@@ -233,7 +260,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   check('welcome not shown', (await evaluate('!document.querySelector(".sheet-overlay")')));
 
   // cleanup test records
-  await evaluate(`db.savings = db.savings.filter(r => r.note !== '测试存款'); db.expenses = db.expenses.filter(r => r.note !== '测试消费'); db.workouts = db.workouts.filter(r => !(r.exercises||[]).some(e => e.name === '测试深蹲') && !(r.activity === 'run' && r.distance === '7.2')); db.studies = db.studies.filter(r => r.content !== '测试学习'); db.readings = db.readings.filter(r => r.book !== '测试之书'); db.weights = db.weights.filter(r => !(r.weight === 71.8 && r.date === todayISO())); db.meals = db.meals.filter(r => r.name !== '测试午餐'); db.water = db.water.filter(r => r.ml !== 300); db.habits = db.habits.filter(r => r.name !== '测试习惯'); db.daily = db.daily.filter(r => r.happy !== '测试开心'); db.workouts = db.workouts.filter(w => w.source !== 'xiaomi'); db.health = []; db.weights = db.weights.filter(w => w.source !== 'xiaomi'); db.settings.nickname = 'Jack'; db.settings.waterGoal = 2200; save(); render()`);
+  await evaluate(`db.savings = db.savings.filter(r => r.note !== '测试存款'); db.expenses = db.expenses.filter(r => r.note !== '测试消费'); db.workouts = db.workouts.filter(r => !(r.exercises||[]).some(e => e.name === '测试深蹲') && !(r.activity === 'run' && r.distance === '7.2')); db.studies = db.studies.filter(r => r.content !== '测试学习'); db.readings = db.readings.filter(r => r.book !== '测试之书'); db.weights = db.weights.filter(r => !(r.weight === 71.8 && r.date === todayISO())); db.meals = db.meals.filter(r => r.name !== '测试午餐'); db.water = db.water.filter(r => r.ml !== 300); db.habits = db.habits.filter(r => r.name !== '测试习惯'); db.daily = db.daily.filter(r => r.happy !== '测试开心'); db.workouts = db.workouts.filter(w => w.source !== 'xiaomi'); db.health = []; db.weights = db.weights.filter(w => w.source !== 'xiaomi'); db.expenses = db.expenses.filter(e => e.source !== 'wechat'); db.settings.nickname = 'Jack'; db.settings.waterGoal = 2200; save(); render()`);
 
   console.log('');
   const failed = results.filter((r) => !r.ok);
